@@ -927,10 +927,50 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
  });
 
  const [commissionOpen,setCommissionOpen]=useState(false);
+ const [commissionDraft,setCommissionDraft]=useState([]);
 
  const set=(key,value)=>{
   setF(current=>({...current,[key]:value}));
  };
+
+ function openCommission(){
+  setCommissionDraft((f.commissionAssignments||[]).map(a=>({...a})));
+  setCommissionOpen(true);
+ }
+
+ function closeCommission(){
+  setCommissionDraft([]);
+  setCommissionOpen(false);
+ }
+
+ function saveCommissionDraft(){
+  const resolved=commissionDraft.map(a=>{
+   if(!String(a.performerId).startsWith('draft-'))return a;
+
+   const existing=performers.find(
+    p=>(p.name||'').trim().toLowerCase()===a.name.trim().toLowerCase()
+   );
+   const person=existing||onAddPerson(a.name);
+
+   if(!person)return null;
+
+   return {...a,performerId:person.id,name:person.name};
+  });
+
+  if(resolved.some(a=>!a)){
+   alert('Unable to save one of the new members. Please try again.');
+   return;
+  }
+
+  const ids=resolved.map(a=>a.performerId);
+  if(new Set(ids).size!==ids.length){
+   alert('A member can only have one commission assignment per event.');
+   return;
+  }
+
+  set('commissionAssignments',resolved);
+  closeCommission();
+ }
 
  const depositAmount=Number(f.depositAmount||0);
  const balanceAmount=Number(f.balanceAmount||0);
@@ -1079,9 +1119,14 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
 
  function addCommission(){
   let person=performers.find(p=>p.id===commissionSelected);
+  let isDraftPerson=false;
 
   if(!person&&commissionPersonName.trim()){
-   person=onAddPerson(commissionPersonName.trim());
+   person={
+    id:'draft-'+uid(),
+    name:commissionPersonName.trim()
+   };
+   isDraftPerson=true;
   }
 
   if(!person){
@@ -1089,7 +1134,10 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
    return;
   }
 
-  if(f.commissionAssignments.some(a=>a.performerId===person.id)){
+  if(commissionDraft.some(a=>
+   a.performerId===person.id||
+   (isDraftPerson&&a.name.trim().toLowerCase()===person.name.trim().toLowerCase())
+  )){
    alert('This member already has a commission assignment for this event.');
    return;
   }
@@ -1101,8 +1149,8 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
    return;
   }
 
-  set('commissionAssignments',[
-   ...f.commissionAssignments,
+  setCommissionDraft(current=>[
+   ...current,
    {
     id:uid(),
     performerId:person.id,
@@ -1126,7 +1174,7 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
 
   const rate=Number(value);
 
-  set('commissionAssignments',f.commissionAssignments.map((a,i)=>
+  setCommissionDraft(current=>current.map((a,i)=>
    i===index
     ?{
       ...a,
@@ -1138,14 +1186,14 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
  }
 
  function removeCommission(index){
-  const assignment=f.commissionAssignments[index];
+  const assignment=commissionDraft[index];
 
   if(assignment?.paid){
    alert('This commission has a paid historical record. Keep the record inside the event.');
    return;
   }
 
-  set('commissionAssignments',f.commissionAssignments.filter((_,i)=>i!==index));
+  setCommissionDraft(current=>current.filter((a,i)=>i!==index));
  }
 
  function save(){
@@ -1497,7 +1545,7 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
 
       <button
        className="btn outline"
-       onClick={()=>setCommissionOpen(true)}
+       onClick={openCommission}
       >
        <Calculator size={15}/> Manage commission
       </button>
@@ -1548,7 +1596,7 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
   </Modal>
 
   {commissionOpen&&order&&
-   <Modal title="Manage commission assignments" onClose={()=>setCommissionOpen(false)} wide>
+   <Modal title="Manage commission assignments" onClose={closeCommission} wide>
     <p className="muted">
      Commission is calculated from Total Amount (Deposit + Balance). Extra Income is excluded.
     </p>
@@ -1560,7 +1608,7 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
      </div>
      <div>
       <small>Total commission</small>
-      <b>{money(memberCommission)}</b>
+      <b>{money(commissionDraft.reduce((sum,a)=>sum+Number(a.commission||0),0))}</b>
      </div>
     </div>
 
@@ -1571,7 +1619,7 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
      >
       <option value="">Select any registered member</option>
       {performers
-       .filter(p=>!f.commissionAssignments.some(a=>a.performerId===p.id))
+       .filter(p=>!commissionDraft.some(a=>a.performerId===p.id))
        .map(p=>
         <option key={p.id} value={p.id}>{p.name}</option>
        )}
@@ -1611,7 +1659,7 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
       </thead>
 
       <tbody>
-       {f.commissionAssignments.map((a,i)=>
+       {commissionDraft.map((a,i)=>
         <tr key={a.id||a.performerId||i}>
          <td>{a.name}</td>
          <td>
@@ -1646,14 +1694,17 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
       </tbody>
      </table>
 
-     {!f.commissionAssignments.length&&
+     {!commissionDraft.length&&
       <p className="muted">No commission assignments yet.</p>
      }
     </div>
 
     <div className="modal-actions">
-     <button className="btn outline" onClick={()=>setCommissionOpen(false)}>
+     <button className="btn outline" onClick={closeCommission}>
       Close
+     </button>
+     <button className="btn primary" onClick={saveCommissionDraft}>
+      <Save size={15}/> Save
      </button>
     </div>
    </Modal>
@@ -1923,6 +1974,16 @@ function Performers({performers,orders,addPerson,update,notify,roles=[]}){
     ));
    }
 
+   const salary=Number(assignment?.salary||0);
+   const claims=assignment?.claims||[];
+   const claimTotal=claims.reduce(
+    (sum,c)=>sum+Number(c.amount||0),0
+   );
+
+   const totalMemberPayment=salary+commission+claimTotal;
+   const salaryAndClaimsPaid=!assignment||Boolean(assignment.paid);
+   const commissionPaid=!commissionAssignment||Boolean(commissionAssignment.paid);
+
    return [{
     ...(assignment||commissionAssignment),
     event:o.event,
@@ -1930,12 +1991,12 @@ function Performers({performers,orders,addPerson,update,notify,roles=[]}){
     orderNo:o.orderNo,
     orderId:o.id,
     roleName:assignment?.roleName||(commissionAssignment?'Commission':'-'),
-    salary:Number(assignment?.salary||0),
+    salary,
     commission,
-    totalAmount:Number(o.price||0),
-    paid:assignment?Boolean(assignment.paid):Boolean(commissionAssignment?.paid),
+    totalMemberPayment,
+    paid:salaryAndClaimsPaid&&commissionPaid,
     paidDate:assignment?.paidDate||commissionAssignment?.paidDate||'',
-    claims:assignment?.claims||[]
+    claims
    }];
   });
  }
@@ -2250,7 +2311,7 @@ function Performers({performers,orders,addPerson,update,notify,roles=[]}){
          <th>SALARY</th>
          <th>COMMISSION</th>
          <th>CLAIMS</th>
-         <th>EVENT TOTAL AMOUNT</th>
+         <th>TOTAL MEMBER PAYMENT</th>
          <th>PAYMENT STATUS</th>
          <th>PAID DATE</th>
         </tr>
@@ -2268,7 +2329,7 @@ function Performers({performers,orders,addPerson,update,notify,roles=[]}){
           <td>{money(a.salary)}</td>
           <td>{money(a.commission)}</td>
           <td>{money(claimTotal)}</td>
-          <td>{money(a.totalAmount)}</td>
+          <td><strong>{money(a.totalMemberPayment)}</strong></td>
           <td>
            <span className={'status '+(a.paid?'good':'pending')}>
             {a.paid?'Paid':'Unpaid'}
