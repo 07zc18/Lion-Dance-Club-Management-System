@@ -1,0 +1,311 @@
+
+import express from 'express';
+import cors from 'cors';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import Database from 'better-sqlite3';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const db = new Database(path.join(__dirname, 'club-data.sqlite'));
+
+db.pragma('journal_mode = WAL');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS club_data (
+    user_id INTEGER PRIMARY KEY,
+    data TEXT NOT NULL,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS user_security (
+    user_id INTEGER PRIMARY KEY,
+    pin_hash TEXT NOT NULL,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+  );
+`);
+
+const app = express();
+app.use(cors());
+app.use(express.json({ limit: '5mb' }));
+
+const secret =
+  process.env.JWT_SECRET || 'change-this-secret-before-deployment';
+
+const sign = user =>
+  jwt.sign(
+    { id: user.id, email: user.email, name: user.name },
+    secret,
+    { expiresIn: '7d' }
+  );
+
+function auth(req, res, next) {
+  try {
+    const token = (req.headers.authorization || '')
+      .replace(/^Bearer\s+/, '');
+
+    if (!token) throw new Error('Missing token');
+
+    req.user = jwt.verify(token, secret);
+    next();
+  } catch {
+    res.status(401).json({ error: 'Please log in again.' });
+  }
+}
+
+function validPin(pin) {
+  return typeof pin === 'string' && /^\d{4,8}$/.test(pin);
+}
+
+// Account registration
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { name, email, password } = req.body || {};
+
+    if (
+      !name?.trim() ||
+      !email?.trim() ||
+      !password ||
+      password.length < 8
+    ) {
+      return res.status(400).json({
+        error: 'Enter your name, a valid email and a password with at least 8 characters.'
+      });
+    }
+
+    const hash = await bcrypt.hash(password, 12);
+
+    const info = db.prepare(`
+      INSERT INTO users(name, email, password_hash)
+      VALUES(?,?,?)
+    `).run(
+      name.trim(),
+      email.trim().toLowerCase(),
+      hash
+    );
+
+    const user = db.prepare(`
+      SELECT id, name, email FROM users WHERE id=?
+    `).get(info.lastInsertRowid);
+
+    db.prepare(`
+      INSERT INTO club_data(user_id, data) VALUES(?,?)
+    `).run(
+      user.id,
+      JSON.stringify({
+        clubName: 'Lion Dance Club',
+        roles: [
+          { id: 'head', name: 'Lion Head', rate: 150 },
+          { id: 'tail', name: 'Lion Tail', rate: 150 },
+          { id: 'drum', name: 'Drummer', rate: 120 },
+          { id: 'cymbals', name: 'Cymbals', rate: 100 },
+          { id: 'gong', name: 'Gong', rate: 100 },
+          { id: 'other', name: 'Other', rate: 80 }
+        ],
+        orders: [],
+        performers: [],
+        utilities: [],
+        purchases: []
+      })
+    );
+
+    res.json({ token: sign(user), user });
+  } catch (e) {
+    if (String(e).includes('UNIQUE')) {
+      return res.status(409).json({
+        error: 'An account with this email already exists.'
+      });
+    }
+
+    res.status(500).json({ error: 'Could not create account.' });
+  }
+});
+
+// Account login
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body || {};
+
+  const row = db.prepare(`
+    SELECT * FROM users WHERE email=?
+  `).get(String(email || '').trim().toLowerCase());
+
+  if (!row || !(await bcrypt.compare(password || '', row.password_hash))) {
+    return res.status(401).json({
+      error: 'Email or password is incorrect.'
+    });
+  }
+
+  const user = {
+    id: row.id,
+    name: row.name,
+    email: row.email
+  };
+
+  res.json({ token: sign(user), user });
+});
+
+// Current account
+app.get('/api/auth/me', auth, (req, res) => {
+  res.json({
+    user: {
+      id: req.user.id,
+      name: req.user.name,
+      email: req.user.email
+    }
+  });
+});
+
+// Read account data
+app.get('/api/data', auth, (req, res) => {
+  const row = db.prepare(`
+    SELECT data FROM club_data WHERE user_id=?
+  `).get(req.user.id);
+
+  res.json(row ? JSON.parse(row.data) : {});
+});
+
+// Save account data
+app.put('/api/data', auth, (req, res) => {
+  const data = req.body;
+
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return res.status(400).json({ error: 'Invalid data.' });
+  }
+
+  db.prepare(`
+    INSERT INTO club_data(user_id, data, updated_at)
+    VALUES(?,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(user_id)
+    DO UPDATE SET
+      data=excluded.data,
+      updated_at=CURRENT_TIMESTAMP
+  `).run(req.user.id, JSON.stringify(data));
+
+  res.json({ ok: true });
+});
+
+// Check whether this account has configured a PIN
+app.get('/api/security/pin/status', auth, (req, res) => {
+  const row = db.prepare(`
+    SELECT user_id FROM user_security WHERE user_id=?
+  `).get(req.user.id);
+
+  res.json({ configured: !!row });
+});
+
+// Set a PIN for the first time, or change an existing PIN
+app.post('/api/security/pin/set', auth, async (req, res) => {
+  try {
+    const { pin, currentPin } = req.body || {};
+
+    if (!validPin(pin)) {
+      return res.status(400).json({
+        error: 'PIN must contain 4 to 8 digits.'
+      });
+    }
+
+    const existing = db.prepare(`
+      SELECT pin_hash FROM user_security WHERE user_id=?
+    `).get(req.user.id);
+
+    if (existing) {
+      if (!validPin(currentPin)) {
+        return res.status(400).json({
+          error: 'Enter your current PIN to change it.'
+        });
+      }
+
+      const matches = await bcrypt.compare(
+        currentPin,
+        existing.pin_hash
+      );
+
+      if (!matches) {
+        return res.status(403).json({
+          error: 'Current PIN is incorrect.'
+        });
+      }
+    }
+
+    const pinHash = await bcrypt.hash(pin, 12);
+
+    db.prepare(`
+      INSERT INTO user_security(user_id, pin_hash, updated_at)
+      VALUES(?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(user_id)
+      DO UPDATE SET
+        pin_hash=excluded.pin_hash,
+        updated_at=CURRENT_TIMESTAMP
+    `).run(req.user.id, pinHash);
+
+    res.json({
+      ok: true,
+      message: existing ? 'PIN changed successfully.' : 'PIN set successfully.'
+    });
+  } catch {
+    res.status(500).json({ error: 'Could not save PIN.' });
+  }
+});
+
+// Verify PIN before unlocking a paid salary record
+app.post('/api/security/pin/verify', auth, async (req, res) => {
+  try {
+    const { pin } = req.body || {};
+
+    if (!validPin(pin)) {
+      return res.status(400).json({
+        error: 'Enter a valid 4 to 8 digit PIN.'
+      });
+    }
+
+    const row = db.prepare(`
+      SELECT pin_hash FROM user_security WHERE user_id=?
+    `).get(req.user.id);
+
+    if (!row) {
+      return res.status(400).json({
+        error: 'Please set up your PIN in Settings first.'
+      });
+    }
+
+    const matches = await bcrypt.compare(pin, row.pin_hash);
+
+    if (!matches) {
+      return res.status(403).json({
+        error: 'Incorrect PIN.'
+      });
+    }
+
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ error: 'Could not verify PIN.' });
+  }
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+const dist = path.join(__dirname, '../dist');
+app.use(express.static(dist));
+
+app.get('*', (req, res) => {
+  res.sendFile(path.join(dist, 'index.html'));
+});
+
+const port = process.env.PORT || 5000;
+
+app.listen(port, '0.0.0.0', () => {
+  console.log(`Lion Dance Club server running on ${port}`);
+});

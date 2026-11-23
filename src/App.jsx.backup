@@ -1,0 +1,3417 @@
+import React,{useEffect,useMemo,useState} from 'react';
+import {LayoutDashboard,ClipboardList,Users,Wallet,Settings,Calculator,Boxes,Plus,Search,MapPin,CalendarDays,TrendingUp,LogOut,Pencil,Trash2,Download,Check,X,Menu,Save,Drum,Receipt,ArrowUpRight,UserPlus,Lock,Mail,ChevronRight} from 'lucide-react';
+import './styles.css';
+const API='/api';
+const defaults=()=>({clubName:'Lion Dance Club',roles:[{id:'head',name:'Lion Head',rate:150},{id:'tail',name:'Lion Tail',rate:150},{id:'drum',name:'Drummer',rate:120},{id:'cymbals',name:'Cymbals',rate:100},{id:'gong',name:'Gong',rate:100},{id:'other',name:'Other',rate:80}],orders:[],performers:[],utilities:[],purchases:[]});
+const money=n=>'RM '+Number(n||0).toLocaleString('en-MY',{minimumFractionDigits:2,maximumFractionDigits:2});
+const today=()=>new Date().toISOString().slice(0,10); const uid=()=>crypto.randomUUID?.()||String(Date.now()+Math.random());
+const csvDownload=(name,rows)=>{const body=rows.map(r=>r.map(v=>'"'+String(v??'').replaceAll('"','""')+'"').join(',')).join('\n');const a=document.createElement('a');const u=URL.createObjectURL(new Blob(['\ufeff'+body],{type:'text/csv;charset=utf-8'}));a.href=u;a.download=name;a.click();URL.revokeObjectURL(u)};
+function App(){
+ const [token,setToken]=useState(localStorage.getItem('ld_token')||'');
+ const [user,setUser]=useState(null);
+ const [authMode,setAuthMode]=useState('login');
+ const [authForm,setAuthForm]=useState({name:'',email:'',password:''});
+ const [authError,setAuthError]=useState('');
+ const [authBusy,setAuthBusy]=useState(false);
+
+ const [data,setData]=useState(defaults());
+ const [loaded,setLoaded]=useState(false);
+ const [page,setPage]=useState('overview');
+ const [modal,setModal]=useState(null);
+ const [query,setQuery]=useState('');
+ const [toast,setToast]=useState('');
+ const [mobile,setMobile]=useState(false);
+
+ const api=async(path,options={})=>{
+  const r=await fetch(API+path,{
+   ...options,
+   headers:{
+    'Content-Type':'application/json',
+    ...(token?{Authorization:`Bearer ${token}`} :{}),
+    ...(options.headers||{})
+   }
+  });
+
+  const j=await r.json().catch(()=>({}));
+
+  if(!r.ok)throw new Error(j.error||'Request failed');
+
+  return j;
+ };
+
+ useEffect(()=>{
+  if(!token){
+   setLoaded(true);
+   return;
+  }
+
+  let live=true;
+
+  (async()=>{
+   try{
+    const [me,d]=await Promise.all([
+     api('/auth/me'),
+     api('/data')
+    ]);
+
+    if(live){
+     setUser(me.user);
+     setData({...defaults(),...d});
+     setLoaded(true);
+    }
+   }catch{
+    localStorage.removeItem('ld_token');
+    setToken('');
+    setUser(null);
+    setLoaded(true);
+   }
+  })();
+
+  return()=>{live=false};
+ },[token]);
+
+ useEffect(()=>{
+  if(!token||!loaded||!user)return;
+
+  const t=setTimeout(async()=>{
+   try{
+    await api('/data',{
+     method:'PUT',
+     body:JSON.stringify(data)
+    });
+   }catch(e){
+    notify(e.message);
+   }
+  },500);
+
+  return()=>clearTimeout(t);
+ },[data,token,loaded,user]);
+
+ useEffect(()=>{
+  if(!toast)return;
+
+  const t=setTimeout(()=>setToast(''),2800);
+
+  return()=>clearTimeout(t);
+ },[toast]);
+
+ function notify(s){
+  setToast(s);
+ }
+
+ async function submitAuth(e){
+  e.preventDefault();
+  setAuthBusy(true);
+  setAuthError('');
+
+  try{
+   const result=await api('/auth/'+authMode,{
+    method:'POST',
+    body:JSON.stringify(authForm)
+   });
+
+   localStorage.setItem('ld_token',result.token);
+   setUser(result.user);
+   setToken(result.token);
+   setLoaded(false);
+  }catch(e){
+   setAuthError(e.message);
+  }finally{
+   setAuthBusy(false);
+  }
+ }
+
+ function logout(){
+  localStorage.removeItem('ld_token');
+  setToken('');
+  setUser(null);
+  setData(defaults());
+  setLoaded(true);
+  setPage('overview');
+ }
+
+ const update=patch=>setData(d=>({...d,...patch}));
+
+ const orders=data.orders||[];
+ const performers=data.performers||[];
+ const roles=data.roles||[];
+
+ const income=orders.reduce(
+  (s,o)=>s+Number(o.price||0)+Number(o.extra||0),0
+ );
+
+ const expenses=orders.reduce(
+  (s,o)=>s+(o.expenses||[]).reduce(
+   (a,x)=>a+Number(x.amount||0),0
+  ),0
+ );
+
+ const salary=orders.reduce(
+  (s,o)=>s+(o.assignments||[]).reduce(
+   (a,p)=>a+Number(p.salary||0),0
+  ),0
+ );
+
+ const memberCommission=orders.reduce(
+  (s,o)=>s+(o.assignments||[]).reduce(
+   (a,p)=>a+Number(p.commission||0),0
+  ),0
+ );
+
+ const memberClaims=orders.reduce(
+  (s,o)=>s+(o.assignments||[]).reduce(
+   (a,p)=>a+(p.claims||[]).reduce(
+    (b,c)=>b+Number(c.amount||0),0
+   ),0
+  ),0
+ );
+
+ const legacyCommission=orders.reduce(
+  (s,o)=>s+(o.commissionMode==='members'?0:Number(o.commission||0)),
+  0
+ );
+
+ const net=
+  income-
+  expenses-
+  salary-
+  memberCommission-
+  memberClaims-
+  legacyCommission;
+
+ const nav=[
+  ['overview','Overview',LayoutDashboard],
+  ['orders','Orders',ClipboardList],
+  ['performers','Members',Users],
+  ['salary','Payment',Wallet],
+  ['utilities','Utilities',Boxes],
+  ['settings','Settings',Settings]
+ ];
+
+ if(!token||!user){
+  return <Auth
+   mode={authMode}
+   setMode={setAuthMode}
+   form={authForm}
+   setForm={setAuthForm}
+   submit={submitAuth}
+   error={authError}
+   busy={authBusy}
+  />;
+ }
+
+ if(!loaded){
+  return <div className="loading-screen">Loading your club records…</div>;
+ }
+
+ const openOrder=o=>setModal({type:'detail',order:o});
+
+ const saveOrder=o=>{
+  update({
+   orders:o.id&&orders.some(x=>x.id===o.id)
+    ?orders.map(x=>x.id===o.id?o:x)
+    :[o,...orders]
+  });
+
+  setModal(null);
+  notify('Order saved');
+ };
+
+ const deleteOrder=id=>{
+  if(confirm('Delete this order and its linked finance records?')){
+   update({orders:orders.filter(o=>o.id!==id)});
+   notify('Order deleted');
+  }
+ };
+
+ const exportOrders=()=>csvDownload(
+  'lion-dance-orders.csv',
+  [
+   [
+    'Order ID',
+    'Event',
+    'Date',
+    'Status',
+    'Location',
+    'Order price',
+    'Additional',
+    'Member salary',
+    'Member commission',
+    'Member additional pay',
+    'Event expenses',
+    'Legacy commission',
+    'Net'
+   ],
+   ...orders.map(o=>{
+    const assignments=o.assignments||[];
+
+    const memberSalary=assignments.reduce(
+     (s,p)=>s+Number(p.salary||0),0
+    );
+
+    const commission=assignments.reduce(
+     (s,p)=>s+Number(p.commission||0),0
+    );
+
+    const claims=assignments.reduce(
+     (s,p)=>s+(p.claims||[]).reduce(
+      (a,c)=>a+Number(c.amount||0),0
+     ),0
+    );
+
+    const expenses=(o.expenses||[]).reduce(
+     (s,x)=>s+Number(x.amount||0),0
+    );
+
+    const legacy=o.commissionMode==='members'
+     ?0
+     :Number(o.commission||0);
+
+    const orderIncome=Number(o.price||0)+Number(o.extra||0);
+
+    return [
+     o.orderNo,
+     o.event,
+     o.date,
+     o.status,
+     o.location,
+     o.price,
+     o.extra,
+     memberSalary,
+     commission,
+     claims,
+     expenses,
+     legacy,
+     orderIncome-memberSalary-commission-claims-expenses-legacy
+    ];
+   })
+  ]
+ );
+
+ const addPerson=name=>{
+  if(!name?.trim())return null;
+
+  const found=performers.find(
+   p=>p.name.toLowerCase()===name.trim().toLowerCase()
+  );
+
+  if(found)return found;
+
+  const p={
+   id:uid(),
+   name:name.trim(),
+   availableRoles:[]
+  };
+
+  update({performers:[...performers,p]});
+
+  return p;
+ };
+
+ return <div className="shell">
+  <aside className={`sidebar ${mobile?'show':''}`}>
+   <div className="brand">
+    <div className="brand-icon"><Drum/></div>
+    <div>
+     <b>{data.clubName||'Lion Dance Club'}</b>
+     <small>CLUB MANAGEMENT</small>
+    </div>
+   </div>
+
+   <div className="nav-caption">WORKSPACE</div>
+
+   {nav.map(([id,label,Icon])=>
+    <button
+     key={id}
+     className={'nav-link '+(page===id?'active':'')}
+     onClick={()=>{
+      setPage(id);
+      setMobile(false);
+     }}
+    >
+     <Icon size={18}/>
+     {label}
+     {id==='orders'&&<span className="nav-count">{orders.length}</span>}
+    </button>
+   )}
+
+   <div className="sidebar-user">
+    <button
+     type="button"
+     className="user-profile-button"
+     onClick={()=>{
+      setPage('account');
+      setMobile(false);
+     }}
+    >
+     <div className="avatar">{user.name?.[0]?.toUpperCase()}</div>
+
+     <div className="user-meta">
+      <b>{user.name}</b>
+      <small>{user.email}</small>
+     </div>
+    </button>
+
+    <button
+     className="icon-button"
+     title="Log out"
+     onClick={logout}
+    >
+     <LogOut size={17}/>
+    </button>
+   </div>
+  </aside>
+
+  <main className="main">
+   <header className="topbar">
+    <button
+     className="icon-button mobile-toggle"
+     onClick={()=>setMobile(!mobile)}
+    >
+     <Menu/>
+    </button>
+
+    <div className="breadcrumb">
+     Workspace <span>/</span> {nav.find(x=>x[0]===page)?.[1]||(
+      page==='account'?'Account':''
+     )}
+    </div>
+
+    <div className="sync-label">
+     <span className="sync-dot"/>
+     Account cloud data
+    </div>
+   </header>
+
+   <div className="content">
+    {page==='overview'&&
+     <Overview
+      data={data}
+      orders={orders}
+      performers={performers}
+      income={income}
+      net={net}
+      setPage={setPage}
+      newOrder={()=>setModal({type:'order'})}
+      openOrder={openOrder}
+     />
+    }
+
+    {page==='orders'&&
+     <Orders
+      orders={orders}
+      query={query}
+      setQuery={setQuery}
+      openOrder={openOrder}
+      editOrder={o=>setModal({type:'order',order:o})}
+      deleteOrder={deleteOrder}
+      newOrder={()=>setModal({type:'order'})}
+      exportOrders={exportOrders}
+     />
+    }
+
+    {page==='performers'&&
+     <Performers
+      performers={performers}
+      orders={orders}
+      roles={roles}
+      addPerson={addPerson}
+      update={update}
+      notify={notify}
+     />
+    }
+
+    {page==='salary'&&
+     <Salary
+      orders={orders}
+      update={update}
+      notify={notify}
+     />
+    }
+
+    {page==='utilities'&&
+     <Utilities
+      data={data}
+      update={update}
+      notify={notify}
+     />
+    }
+
+    {page==='settings'&&
+     <SettingsPage
+      data={data}
+      update={update}
+      notify={notify}
+     />
+    }
+
+    {page==='account'&&
+     <Account
+      user={user}
+      setUser={setUser}
+      api={api}
+      logout={logout}
+      notify={notify}
+     />
+    }
+   </div>
+  </main>
+
+  {modal?.type==='order'&&
+   <OrderEditor
+    order={modal.order}
+    performers={performers}
+    roles={roles}
+    onClose={()=>setModal(null)}
+    onAddPerson={addPerson}
+    onSave={saveOrder}
+   />
+  }
+
+  {modal?.type==='detail'&&
+   <EventDetails
+    order={modal.order}
+    roles={roles}
+    onClose={()=>setModal(null)}
+    onEdit={()=>setModal({type:'order',order:modal.order})}
+   />
+  }
+
+  {toast&&
+   <div className="toast">
+    <Check size={16}/>{toast}
+   </div>
+  }
+ </div>;
+}
+function Account({user,setUser,api,logout,notify}){
+ const [committeeRole,setCommitteeRole]=useState(
+  user.committeeRole||'Member'
+ );
+ const [password,setPassword]=useState('');
+ const [saving,setSaving]=useState(false);
+ const [deleting,setDeleting]=useState(false);
+
+ const committeeRoles=[
+  'President',
+  'Vice President',
+  'Secretary',
+  'Treasurer',
+  'Committee Member',
+  'Member',
+  'Other'
+ ];
+
+ async function saveRole(){
+  setSaving(true);
+
+  try{
+   const result=await api('/auth/account',{
+    method:'PUT',
+    body:JSON.stringify({committeeRole})
+   });
+
+   setUser(result.user||{...user,committeeRole});
+   notify('Committee role updated');
+  }catch(e){
+   notify(e.message);
+  }finally{
+   setSaving(false);
+  }
+ }
+
+ async function deleteAccount(){
+  if(!password){
+   notify('Please enter your password');
+   return;
+  }
+
+  if(!confirm(
+   'Permanently delete your account and all club records belonging to this account? This cannot be undone.'
+  )){
+   return;
+  }
+
+  setDeleting(true);
+
+  try{
+   await api('/auth/account',{
+    method:'DELETE',
+    body:JSON.stringify({password})
+   });
+
+   alert('Your account has been deleted.');
+   logout();
+  }catch(e){
+   notify(e.message);
+   setDeleting(false);
+  }
+ }
+
+ return <>
+  <Heading
+   eyebrow="PERSONAL SETTINGS"
+   title="Account"
+   desc="Manage your account information and committee position."
+  />
+
+  <div className="two-col">
+   <Panel title="Account information" desc="Your registered account details">
+    <div className="glance">
+     <div>
+      <span>Full name</span>
+      <b>{user.name}</b>
+     </div>
+     <div>
+      <span>Email address</span>
+      <b>{user.email}</b>
+     </div>
+     <div>
+      <span>Committee position</span>
+      <b>{user.committeeRole||'Member'}</b>
+     </div>
+    </div>
+   </Panel>
+
+   <Panel title="Committee position" desc="Set your current position in the club">
+    <div className="purchase-form">
+     <label className="field-group">
+      <span>Committee role</span>
+      <select
+       className="field"
+       value={committeeRole}
+       onChange={e=>setCommitteeRole(e.target.value)}
+      >
+       {committeeRoles.map(role=>
+        <option key={role} value={role}>{role}</option>
+       )}
+      </select>
+     </label>
+
+     <button
+      className="btn primary"
+      onClick={saveRole}
+      disabled={saving}
+     >
+      <Save size={16}/>
+      {saving?'Saving…':'Save position'}
+     </button>
+    </div>
+   </Panel>
+  </div>
+
+  <Panel
+   title="Delete account"
+   desc="Permanently delete your account and all club records stored under it."
+  >
+   <div className="purchase-form">
+    <label className="field-group">
+     <span>Confirm your password</span>
+     <input
+      className="field"
+      type="password"
+      value={password}
+      onChange={e=>setPassword(e.target.value)}
+      placeholder="Enter your account password"
+     />
+    </label>
+
+    <div>
+     <button
+      className="btn danger"
+      onClick={deleteAccount}
+      disabled={deleting}
+     >
+      <Trash2 size={16}/>
+      {deleting?'Deleting…':'Permanently delete account'}
+     </button>
+    </div>
+   </div>
+  </Panel>
+ </>;
+}
+function Auth({mode,setMode,form,setForm,submit,error,busy}){return <div className="auth-page"><div className="auth-art"><div className="auth-brand"><div className="brand-icon"><Drum/></div><span>LION DANCE CLUB</span></div><div className="auth-copy"><div className="eyebrow">YOUR CLUB, ORGANIZED</div><h1>Every performance.<br/>Every detail.<br/><em>One place.</em></h1><p>Manage bookings, members, payroll and club finances with records tied to your account.</p></div><div className="auth-foot">Secure account-based club management</div></div><div className="auth-panel"><form className="auth-card" onSubmit={submit}><div className="auth-symbol"><Lock/></div><div className="eyebrow">WELCOME</div><h2>{mode==='login'?'Sign in to your club':'Create your account'}</h2><p>{mode==='login'?'Access your club records from any device.':'Start managing your lion dance club records.'}</p>{mode==='register'&&<label>Full name<input required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Your name"/></label>}<label>Email address<input required type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="name@example.com"/></label><label>Password<input required minLength="8" type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="At least 8 characters"/></label>{error&&<div className="error-box">{error}</div>}<button className="btn primary full" disabled={busy}>{busy?'Please wait…':mode==='login'?'Sign in':'Create account'}</button><div className="auth-switch">{mode==='login'?"Don't have an account?":"Already have an account?"} <button type="button" onClick={()=>setMode(mode==='login'?'register':'login')}>{mode==='login'?'Register':'Sign in'}</button></div></form></div></div>}
+function Heading({eyebrow,title,desc,action}){return <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{desc}</p></div>{action}</div>}
+function Stat({label,value,sub,icon:Icon,tone=''}){return <div className="stat-card"><div className={'stat-icon '+tone}><Icon size={19}/></div><div className="stat-label">{label}</div><div className="stat-value">{value}</div><div className="stat-sub">{sub}</div></div>}
+function Panel({title,desc,children,action}){return <section className="panel"><div className="panel-head"><div><h3>{title}</h3>{desc&&<p>{desc}</p>}</div>{action}</div>{children}</section>}
+function Empty({title,desc}){return <div className="empty"><div className="empty-icon"><Receipt/></div><b>{title}</b><p>{desc}</p></div>}
+function Overview({data,orders,performers,income,net,setPage,newOrder,openOrder}){
+ const pending=orders.filter(o=>o.status!=='past');
+ const past=orders.filter(o=>o.status==='past');
+
+ const upcoming=[...pending]
+  .sort((a,b)=>(a.date||'').localeCompare(b.date||''))
+  .slice(0,5);
+
+ return <>
+  <Heading
+   eyebrow="CLUB SNAPSHOT"
+   title="Overview"
+   desc="A quick view of bookings and club finances."
+   action={
+    <button className="btn primary" onClick={newOrder}>
+     <Plus size={17}/> Add order
+    </button>
+   }
+  />
+
+  <div className="stats-grid">
+   <Stat
+    label="Total orders"
+    value={orders.length}
+    sub={`${pending.length} pending · ${past.length} past`}
+    icon={ClipboardList}
+   />
+
+   <Stat
+    label="Total income"
+    value={money(income)}
+    sub="Order price + additional money"
+    icon={TrendingUp}
+    tone="gold"
+   />
+
+   <Stat
+    label="Net earnings"
+    value={money(net)}
+    sub="After commission, salaries and expenses"
+    icon={Wallet}
+    tone="green"
+   />
+
+   <Stat
+    label="Members"
+    value={performers.length}
+    sub="Registered club members"
+    icon={Users}
+    tone="blue"
+   />
+  </div>
+
+  <div className="two-col">
+   <Panel title="Upcoming orders" desc="Pending performances">
+    <div className="simple-list">
+     {upcoming.length?upcoming.map(o=>
+      <button
+       className="list-row clickable"
+       key={o.id}
+       onClick={()=>openOrder(o)}
+      >
+       <div className="date-chip">
+        <b>{o.date?.slice(8,10)||'--'}</b>
+        <small>{o.date?.slice(5,7)||'--'}</small>
+       </div>
+
+       <div className="list-main">
+        <b>{o.event}</b>
+        <small>
+         <MapPin size={12}/>{o.location}
+        </small>
+       </div>
+
+       <strong>
+        {money(Number(o.price||0)+Number(o.extra||0))}
+       </strong>
+
+       <ChevronRight size={16}/>
+      </button>
+     ):<Empty
+      title="No pending orders"
+      desc="New bookings will appear here."
+     />}
+    </div>
+   </Panel>
+
+   <Panel title="Club at a glance" desc="Your current records">
+    <div className="glance">
+     <div>
+      <span>Pending orders</span>
+      <b>{pending.length}</b>
+     </div>
+
+     <div>
+      <span>Past orders</span>
+      <b>{past.length}</b>
+     </div>
+
+     <div>
+      <span>Utilities tracked</span>
+      <b>{data.utilities?.length||0}</b>
+     </div>
+    </div>
+
+    <button
+     className="btn outline full"
+     onClick={()=>setPage('salary')}
+    >
+     Open Payment page <ArrowUpRight size={16}/>
+    </button>
+   </Panel>
+  </div>
+ </>;
+}
+function Orders({orders,query,setQuery,openOrder,editOrder,deleteOrder,newOrder,exportOrders}){const [tab,setTab]=useState('pending');const [month,setMonth]=useState('');const filtered=orders.filter(o=>(tab==='past'?o.status==='past':o.status!=='past')&&(`${o.orderNo} ${o.event} ${o.location}`.toLowerCase().includes(query.toLowerCase()))&&(!month||o.date?.startsWith(month))).sort((a,b)=>(b.date||'').localeCompare(a.date||''));return <><Heading eyebrow="BOOKING RECORDS" title="Orders" desc="Track upcoming and completed lion dance performances." action={<button className="btn primary" onClick={newOrder}><Plus size={17}/> Add order</button>}/><div className="toolbar"><div className="tabs"><button className={tab==='pending'?'selected':''} onClick={()=>setTab('pending')}>Pending <span>{orders.filter(o=>o.status!=='past').length}</span></button><button className={tab==='past'?'selected':''} onClick={()=>setTab('past')}>Past <span>{orders.filter(o=>o.status==='past').length}</span></button></div><div className="searchbox"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search event or order…"/></div><input className="field month-field" type="month" value={month} onChange={e=>setMonth(e.target.value)}/><button className="btn outline" onClick={exportOrders}><Download size={16}/> Export</button></div><Panel title={`${tab==='pending'?'Pending':'Past'} orders`} desc="Select an event name to view its full record."><div className="table-wrap"><table><thead><tr><th>EVENT NAME</th><th>DATE</th><th>LOCATION</th><th>ORDER PRICE</th><th>MEMBERS</th><th>PAYMENT</th><th/></tr></thead><tbody>{filtered.map(o=><tr key={o.id}><td><button className="event-link" onClick={()=>openOrder(o)}>{o.event||'Untitled event'}</button><small>{o.orderNo}</small></td><td>{o.date}</td><td>{o.location}</td><td>{money(o.price)}</td><td>{o.assignments?.length||0}</td><td><span className={'status '+(o.paymentStatus==='Received'?'good':'pending')}>{o.paymentStatus||'Pending'}</span></td><td><div className="row-actions"><button className="icon-button" title="Edit" onClick={()=>editOrder(o)}><Pencil size={15}/></button><button className="icon-button danger" title="Delete" onClick={()=>deleteOrder(o.id)}><Trash2 size={15}/></button></div></td></tr>)}</tbody></table>{!filtered.length&&<Empty title={`No ${tab} orders`} desc="Add an order or change your search filters."/>}</div></Panel></>}
+function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
+ const [f,setF]=useState(()=>{
+  const price=Number(order?.price||0);
+  const extra=Number(order?.extra||0);
+
+  const oldCommissionAssignments=order?.assignments||[];
+
+  const commissionAssignments=Array.isArray(order?.commissionAssignments)
+   ?order.commissionAssignments
+   :oldCommissionAssignments
+    .filter(a=>
+     Number(a.commissionRate||0)>0||
+     Number(a.commission||0)>0
+    )
+    .map(a=>({
+     id:uid(),
+     performerId:a.performerId,
+     name:a.name,
+     commissionRate:a.commissionRate??(
+      price>0?Number(a.commission||0)/price*100:0
+     ),
+     commission:a.commission||0,
+     paid:Boolean(a.commissionPaid??a.paid),
+     paidDate:a.commissionPaidDate||a.paidDate||''
+    }));
+
+  return {
+   ...(order||{}),
+   id:order?.id||uid(),
+   orderNo:order?.orderNo||'LD-'+Date.now().toString().slice(-6),
+   event:order?.event||'',
+   date:order?.date||today(),
+   location:order?.location||'',
+   customer:order?.customer||'',
+   price:order?.price??'',
+   extra:order?.extra??'0',
+   depositReceived:order
+    ?order.depositReceived??(
+      order.paymentStatus==='Received'||
+      order.paymentStatus==='Fully Received'
+       ?price+extra
+       :order.paymentStatus==='Partially received'
+        ?''
+        :0
+     )
+    :0,
+   commission:order?.commission||0,
+   commissionRate:order?.commissionRate||0,
+   status:order?.status||'pending',
+   paymentStatus:order?.paymentStatus||'Pending',
+   notes:order?.notes||'',
+   assignments:(order?.assignments||[]).map(a=>({
+    ...a,
+    claims:a.claims||[]
+   })),
+   commissionAssignments,
+   expenses:order?.expenses||[]
+  };
+ });
+
+ const [personName,setPersonName]=useState('');
+ const [selected,setSelected]=useState('');
+ const [role,setRole]=useState(roles[0]?.id||'');
+ const [customSalary,setCustomSalary]=useState('');
+
+ const [commissionPersonName,setCommissionPersonName]=useState('');
+ const [commissionSelected,setCommissionSelected]=useState('');
+ const [commissionRate,setCommissionRate]=useState('');
+
+ const [claimDraft,setClaimDraft]=useState({
+  category:'Food',
+  description:'',
+  date:today(),
+  amount:''
+ });
+
+ const [commissionOpen,setCommissionOpen]=useState(false);
+
+ const set=(key,value)=>{
+  setF(current=>({...current,[key]:value}));
+ };
+
+ const orderPrice=Number(f.price||0);
+ const additionalMoney=Number(f.extra||0);
+ const orderTotal=orderPrice+additionalMoney;
+ const amountReceived=Number(f.depositReceived||0);
+ const balanceDue=Math.max(0,orderTotal-amountReceived);
+
+ const memberCommission=(f.commissionAssignments||[]).reduce(
+  (sum,a)=>sum+Number(a.commission||0),
+  0
+ );
+
+ const totalSalary=(f.assignments||[]).reduce(
+  (sum,a)=>sum+Number(a.salary||0),
+  0
+ );
+
+ const totalClaims=(f.assignments||[]).reduce(
+  (sum,a)=>sum+(a.claims||[]).reduce(
+   (s,c)=>s+Number(c.amount||0),0
+  ),
+  0
+ );
+
+ function addMember(){
+  let person=performers.find(p=>p.id===selected);
+
+  if(!person&&personName.trim()){
+   person=onAddPerson(personName.trim());
+  }
+
+  if(!person){
+   alert('Select an existing member or enter a new name.');
+   return;
+  }
+
+  if(f.assignments.some(a=>a.performerId===person.id)){
+   alert('This member is already assigned to this order.');
+   return;
+  }
+
+  const selectedRole=roles.find(r=>r.id===role);
+
+  set('assignments',[
+   ...f.assignments,
+   {
+    id:uid(),
+    performerId:person.id,
+    name:person.name,
+    roleName:selectedRole?.name||'Other',
+    salary:customSalary===''?Number(selectedRole?.rate||0):Number(customSalary),
+    commissionRate:0,
+    commission:0,
+    claims:[],
+    paid:false
+   }
+  ]);
+
+  setSelected('');
+  setPersonName('');
+  setCustomSalary('');
+ }
+
+ function updateAssignment(index,patch){
+  set('assignments',f.assignments.map((a,i)=>
+   i===index?{...a,...patch}:a
+  ));
+ }
+
+ function removeMember(index){
+  const assignment=f.assignments[index];
+
+  if(assignment?.paid){
+   alert('This member has a paid historical record. Keep the record inside the order.');
+   return;
+  }
+
+  if(!confirm(`Remove ${assignment?.name||'this member'} from this order?`)){
+   return;
+  }
+
+  set('assignments',f.assignments.filter((_,i)=>i!==index));
+ }
+
+ function addClaim(index){
+  const amount=Number(claimDraft.amount);
+  const assignment=f.assignments[index];
+
+  if(!assignment){
+   return;
+  }
+
+  if(!claimDraft.description.trim()){
+   alert('Please enter a claim description.');
+   return;
+  }
+
+  if(!claimDraft.date){
+   alert('Please select the claim date.');
+   return;
+  }
+
+  if(!Number.isFinite(amount)||amount<=0){
+   alert('Please enter a valid claim amount.');
+   return;
+  }
+
+  const claim={
+   id:uid(),
+   category:claimDraft.category,
+   description:claimDraft.description.trim(),
+   date:claimDraft.date,
+   amount,
+   paid:false
+  };
+
+  updateAssignment(index,{
+   claims:[...(assignment.claims||[]),claim]
+  });
+
+  setClaimDraft({
+   category:'Food',
+   description:'',
+   date:today(),
+   amount:''
+  });
+ }
+
+ function deleteClaim(index,claimId){
+  const assignment=f.assignments[index];
+
+  if(!assignment)return;
+
+  updateAssignment(index,{
+   claims:(assignment.claims||[]).filter(c=>c.id!==claimId)
+  });
+ }
+
+ function addCommission(){
+  let person=performers.find(p=>p.id===commissionSelected);
+
+  if(!person&&commissionPersonName.trim()){
+   person=onAddPerson(commissionPersonName.trim());
+  }
+
+  if(!person){
+   alert('Select an existing member or enter a new name.');
+   return;
+  }
+
+  if(f.commissionAssignments.some(a=>a.performerId===person.id)){
+   alert('This member already has a commission assignment for this order.');
+   return;
+  }
+
+  const rate=Number(commissionRate);
+
+  if(commissionRate===''||!Number.isFinite(rate)||rate<0||rate>100){
+   alert('Enter a commission percentage between 0 and 100.');
+   return;
+  }
+
+  set('commissionAssignments',[
+   ...f.commissionAssignments,
+   {
+    id:uid(),
+    performerId:person.id,
+    name:person.name,
+    commissionRate:rate,
+    commission:Number((orderPrice*rate/100).toFixed(2)),
+    paid:false,
+    paidDate:''
+   }
+  ]);
+
+  setCommissionSelected('');
+  setCommissionPersonName('');
+  setCommissionRate('');
+ }
+
+ function updateCommission(index,value){
+  if(value===''||!Number.isFinite(Number(value))||Number(value)<0||Number(value)>100){
+   return;
+  }
+
+  const rate=Number(value);
+
+  set('commissionAssignments',f.commissionAssignments.map((a,i)=>
+   i===index
+    ?{
+      ...a,
+      commissionRate:rate,
+      commission:Number((orderPrice*rate/100).toFixed(2))
+     }
+    :a
+  ));
+ }
+
+ function removeCommission(index){
+  const assignment=f.commissionAssignments[index];
+
+  if(assignment?.paid){
+   alert('This commission has a paid historical record. Keep the record inside the order.');
+   return;
+  }
+
+  set('commissionAssignments',f.commissionAssignments.filter((_,i)=>i!==index));
+ }
+
+ function save(){
+  if(!f.event.trim()||!f.date||!f.location.trim()){
+   alert('Event name, date and location are required.');
+   return;
+  }
+
+  if(orderTotal<0||amountReceived<0){
+   alert('Please enter valid order payment amounts.');
+   return;
+  }
+
+  if(amountReceived>orderTotal){
+   alert('The amount received cannot be greater than the order total.');
+   return;
+  }
+
+  const assignments=f.assignments.map(a=>({
+   ...a,
+   salary:Number(a.salary||0),
+   claims:a.claims||[]
+  }));
+
+  const commissions=f.commissionAssignments.map(a=>({
+   ...a,
+   commissionRate:Number(a.commissionRate||0),
+   commission:Number(
+    (orderPrice*Number(a.commissionRate||0)/100).toFixed(2)
+   )
+  }));
+
+  let paymentStatus='Pending';
+
+  if(amountReceived>0&&amountReceived<orderTotal){
+   paymentStatus='Partially received';
+  }else if(orderTotal>0&&amountReceived>=orderTotal){
+   paymentStatus='Fully Received';
+  }
+
+  // Keep an old partial-payment status when its actual received
+  // amount was never recorded in the previous version.
+  if(
+   order&&
+   f.depositReceived===''&&
+   order.paymentStatus==='Partially received'&&
+   order.depositReceived===undefined
+  ){
+   paymentStatus='Partially received';
+  }
+
+  onSave({
+   ...f,
+   assignments,
+   commissionAssignments:commissions,
+   price:orderPrice,
+   extra:additionalMoney,
+   depositReceived:f.depositReceived===''?'':amountReceived,
+   paymentStatus,
+   commission:Number(f.commission||0),
+   commissionRate:Number(f.commissionRate||0),
+   expenses:f.expenses||[]
+  });
+ }
+
+ return <>
+  <Modal title={order?'Edit order':'Add order'} onClose={onClose} wide>
+   <div className="form-grid">
+    <Field label="Order ID">
+     <input
+      value={f.orderNo}
+      onChange={e=>set('orderNo',e.target.value)}
+     />
+    </Field>
+
+    <Field label="Event date *">
+     <input
+      type="date"
+      value={f.date}
+      onChange={e=>set('date',e.target.value)}
+     />
+    </Field>
+
+    <Field label="Event name *" wide>
+     <input
+      value={f.event}
+      onChange={e=>set('event',e.target.value)}
+      placeholder="e.g. Shop opening ceremony"
+     />
+    </Field>
+
+    <Field label="Location *" wide>
+     <input
+      value={f.location}
+      onChange={e=>set('location',e.target.value)}
+     />
+    </Field>
+
+    <Field label="Customer / organizer">
+     <input
+      value={f.customer||''}
+      onChange={e=>set('customer',e.target.value)}
+     />
+    </Field>
+
+    <Field label="Order status">
+     <select
+      value={f.status||'pending'}
+      onChange={e=>set('status',e.target.value)}
+     >
+      <option value="pending">Pending</option>
+      <option value="past">Past / completed</option>
+     </select>
+    </Field>
+
+    <Field label="Order price (RM)">
+     <input
+      type="number"
+      min="0"
+      step="0.01"
+      value={f.price}
+      onChange={e=>set('price',e.target.value)}
+     />
+    </Field>
+
+    <Field label="Additional money (RM)">
+     <input
+      type="number"
+      min="0"
+      step="0.01"
+      value={f.extra}
+      onChange={e=>set('extra',e.target.value)}
+     />
+    </Field>
+
+    <Field label="Total order amount (RM)">
+     <input value={money(orderTotal)} readOnly/>
+    </Field>
+
+    <Field label="Total amount received (RM)">
+     <input
+      type="number"
+      min="0"
+      step="0.01"
+      value={f.depositReceived}
+      onChange={e=>set('depositReceived',e.target.value)}
+      placeholder="Enter deposit or total received"
+     />
+    </Field>
+
+    <Field label="Balance due (RM)">
+     <input value={money(balanceDue)} readOnly/>
+    </Field>
+
+    <Field label="Customer payment status">
+     <input
+      value={
+       f.depositReceived===''&&f.paymentStatus==='Partially received'
+        ?'Partially received'
+        :amountReceived<=0
+         ?'Pending'
+         :amountReceived>=orderTotal&&orderTotal>0
+          ?'Fully Received'
+          :'Partially received'
+      }
+      readOnly
+     />
+    </Field>
+
+    <Field label="Notes" wide>
+     <textarea
+      rows="2"
+      value={f.notes||''}
+      onChange={e=>set('notes',e.target.value)}
+     />
+    </Field>
+   </div>
+
+   {order&&<>
+    <div className="subsection">
+     <div className="subsection-head">
+      <div>
+       <h3>Members & roles</h3>
+       <p>
+        Add performers after creating the order. Default salaries come from Settings.
+       </p>
+      </div>
+     </div>
+
+     <div className="assignment-add">
+      <select
+       value={selected}
+       onChange={e=>setSelected(e.target.value)}
+      >
+       <option value="">Select existing member</option>
+       {performers
+        .filter(p=>!f.assignments.some(a=>a.performerId===p.id))
+        .map(p=>
+         <option key={p.id} value={p.id}>{p.name}</option>
+        )}
+      </select>
+
+      <input
+       placeholder="Or add new member name"
+       value={personName}
+       onChange={e=>setPersonName(e.target.value)}
+      />
+
+      <select
+       value={role}
+       onChange={e=>setRole(e.target.value)}
+      >
+       {roles.map(r=>
+        <option key={r.id} value={r.id}>
+         {r.name} · {money(r.rate)}
+        </option>
+       )}
+      </select>
+
+      <input
+       type="number"
+       min="0"
+       step="0.01"
+       placeholder="Salary override"
+       value={customSalary}
+       onChange={e=>setCustomSalary(e.target.value)}
+      />
+
+      <button className="btn outline" onClick={addMember}>
+       <UserPlus size={15}/> Add member
+      </button>
+     </div>
+
+     {f.assignments.map((a,i)=>
+      <div className="assignment-row" key={a.id||a.performerId||i}>
+       <div>
+        <b>{a.name}</b>
+        <small>{a.roleName}</small>
+       </div>
+
+       <label>
+        Salary RM
+        <input
+         type="number"
+         min="0"
+         step="0.01"
+         value={a.salary}
+         onChange={e=>updateAssignment(i,{salary:e.target.value})}
+        />
+       </label>
+
+       <span className={'status '+(a.paid?'good':'pending')}>
+        {a.paid?'Paid':'Unpaid'}
+       </span>
+
+       <button
+        className="icon-button danger"
+        title="Remove member"
+        onClick={()=>removeMember(i)}
+       >
+        <X size={16}/>
+       </button>
+
+       <div className="span-2">
+        <details>
+         <summary>Additional pay claims ({(a.claims||[]).length})</summary>
+
+         {(a.claims||[]).map(c=>
+          <div className="history-row" key={c.id}>
+           <span>
+            {c.category} · {c.description}
+            <small>{c.date}</small>
+           </span>
+           <b>{money(c.amount)}</b>
+           <button
+            className="icon-button danger"
+            title="Remove claim"
+            onClick={()=>deleteClaim(i,c.id)}
+           >
+            <Trash2 size={14}/>
+           </button>
+          </div>
+         )}
+
+         <div className="form-grid">
+          <Field label="Category">
+           <select
+            value={claimDraft.category}
+            onChange={e=>setClaimDraft(x=>({...x,category:e.target.value}))}
+           >
+            <option>Food</option>
+            <option>Toll</option>
+            <option>Parking</option>
+            <option>Transportation</option>
+            <option>Equipment</option>
+            <option>Medical</option>
+            <option>Other</option>
+           </select>
+          </Field>
+
+          <Field label="Claim date">
+           <input
+            type="date"
+            value={claimDraft.date}
+            onChange={e=>setClaimDraft(x=>({...x,date:e.target.value}))}
+           />
+          </Field>
+
+          <Field label="Description">
+           <input
+            value={claimDraft.description}
+            onChange={e=>setClaimDraft(x=>({...x,description:e.target.value}))}
+            placeholder="e.g. Food after performance"
+           />
+          </Field>
+
+          <Field label="Amount (RM)">
+           <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={claimDraft.amount}
+            onChange={e=>setClaimDraft(x=>({...x,amount:e.target.value}))}
+           />
+          </Field>
+
+          <button
+           type="button"
+           className="btn outline"
+           onClick={()=>addClaim(i)}
+          >
+           <Plus size={15}/> Add claim
+          </button>
+         </div>
+        </details>
+       </div>
+      </div>
+     )}
+
+     <div className="sub-total">
+      <span>Total member salary</span>
+      <b>{money(totalSalary)}</b>
+     </div>
+
+     <div className="sub-total">
+      <span>Total additional pay claims</span>
+      <b>{money(totalClaims)}</b>
+     </div>
+    </div>
+
+    <div className="subsection">
+     <div className="subsection-head">
+      <div>
+       <h3>Commission assignments</h3>
+       <p>
+        Commission can be assigned to any registered member, whether or not they perform at this event.
+       </p>
+      </div>
+
+      <button
+       className="btn outline"
+       onClick={()=>setCommissionOpen(true)}
+      >
+       <Calculator size={15}/> Manage commission
+      </button>
+     </div>
+
+     {f.commissionAssignments.length?
+      f.commissionAssignments.map((a,i)=>
+       <div className="assignment-row" key={a.id||a.performerId||i}>
+        <div>
+         <b>{a.name}</b>
+         <small>{Number(a.commissionRate||0)}% commission</small>
+        </div>
+
+        <strong>{money(a.commission)}</strong>
+
+        <span className={'status '+(a.paid?'good':'pending')}>
+         {a.paid?'Paid':'Unpaid'}
+        </span>
+
+        {!a.paid&&
+         <button
+          className="icon-button danger"
+          title="Remove commission"
+          onClick={()=>removeCommission(i)}
+         >
+          <X size={16}/>
+         </button>
+        }
+       </div>
+      )
+      :
+      <p className="muted">No commission assignments yet.</p>
+     }
+
+     <div className="sub-total">
+      <span>Total commission</span>
+      <b>{money(memberCommission)}</b>
+     </div>
+    </div>
+   </>}
+
+   <div className="modal-actions">
+    <button className="btn outline" onClick={onClose}>Cancel</button>
+    <button className="btn primary" onClick={save}>
+     <Save size={16}/> Save order
+    </button>
+   </div>
+  </Modal>
+
+  {commissionOpen&&order&&
+   <Modal title="Manage commission assignments" onClose={()=>setCommissionOpen(false)} wide>
+    <p className="muted">
+     Commission is calculated from the order price only. Additional money is excluded.
+    </p>
+
+    <div className="detail-grid">
+     <div>
+      <small>Order price</small>
+      <b>{money(orderPrice)}</b>
+     </div>
+     <div>
+      <small>Total commission</small>
+      <b>{money(memberCommission)}</b>
+     </div>
+    </div>
+
+    <div className="assignment-add">
+     <select
+      value={commissionSelected}
+      onChange={e=>setCommissionSelected(e.target.value)}
+     >
+      <option value="">Select any registered member</option>
+      {performers
+       .filter(p=>!f.commissionAssignments.some(a=>a.performerId===p.id))
+       .map(p=>
+        <option key={p.id} value={p.id}>{p.name}</option>
+       )}
+     </select>
+
+     <input
+      value={commissionPersonName}
+      onChange={e=>setCommissionPersonName(e.target.value)}
+      placeholder="Or add new member name"
+     />
+
+     <input
+      type="number"
+      min="0"
+      max="100"
+      step="0.01"
+      value={commissionRate}
+      onChange={e=>setCommissionRate(e.target.value)}
+      placeholder="Commission %"
+     />
+
+     <button className="btn outline" onClick={addCommission}>
+      <Plus size={15}/> Add commission
+     </button>
+    </div>
+
+    <div className="table-wrap">
+     <table>
+      <thead>
+       <tr>
+        <th>MEMBER</th>
+        <th>COMMISSION (%)</th>
+        <th>COMMISSION (RM)</th>
+        <th>STATUS</th>
+        <th/>
+       </tr>
+      </thead>
+
+      <tbody>
+       {f.commissionAssignments.map((a,i)=>
+        <tr key={a.id||a.performerId||i}>
+         <td>{a.name}</td>
+         <td>
+          <input
+           type="number"
+           min="0"
+           max="100"
+           step="0.01"
+           value={a.commissionRate??0}
+           onChange={e=>updateCommission(i,e.target.value)}
+          />
+         </td>
+         <td>{money(orderPrice*Number(a.commissionRate||0)/100)}</td>
+         <td>
+          <span className={'status '+(a.paid?'good':'pending')}>
+           {a.paid?'Paid':'Unpaid'}
+          </span>
+         </td>
+         <td>
+          {!a.paid&&
+           <button
+            className="icon-button danger"
+            onClick={()=>removeCommission(i)}
+            title="Remove commission"
+           >
+            <Trash2 size={14}/>
+           </button>
+          }
+         </td>
+        </tr>
+       )}
+      </tbody>
+     </table>
+
+     {!f.commissionAssignments.length&&
+      <p className="muted">No commission assignments yet.</p>
+     }
+    </div>
+
+    <div className="modal-actions">
+     <button className="btn outline" onClick={()=>setCommissionOpen(false)}>
+      Close
+     </button>
+    </div>
+   </Modal>
+  }
+ </>;
+}
+function Field({label,wide,children}){return <label className={'field-group '+(wide?'span-2':'')}>{label}{children}</label>}
+function Modal({title,onClose,children,wide}){return <div className="modal-backdrop" onMouseDown={e=>e.target===e.currentTarget&&onClose()}><section className={'modal '+(wide?'wide':'')}><div className="modal-head"><h2>{title}</h2><button className="icon-button" onClick={onClose}><X size={19}/></button></div>{children}</section></div>}
+function EventDetails({order:o,roles,onClose,onEdit}){
+ const assignments=o.assignments||[];
+ const separateCommissions=Array.isArray(o.commissionAssignments);
+ const commissions=o.commissionAssignments||[];
+
+ const salary=assignments.reduce(
+  (s,a)=>s+Number(a.salary||0),0
+ );
+
+ const legacyMemberCommission=separateCommissions?0:
+  assignments.reduce((s,a)=>s+Number(
+   a.commission??(
+    Number(o.price||0)*Number(a.commissionRate||0)/100
+   )
+  ),0);
+
+ const commissionTotal=separateCommissions?
+  commissions.reduce((s,c)=>s+Number(
+   c.commission??(
+    Number(o.price||0)*Number(c.commissionRate||0)/100
+   )
+  ),0):legacyMemberCommission;
+
+ const claims=assignments.flatMap(a=>
+  (a.claims||[]).map(c=>({...c,memberName:a.name}))
+ );
+
+ const totalClaims=claims.reduce(
+  (s,c)=>s+Number(c.amount||0),0
+ );
+
+ const expenses=o.expenses||[];
+ const expenseTotal=expenses.reduce(
+  (s,e)=>s+Number(e.amount||0),0
+ );
+
+ const legacyCommission=o.commissionMode==='members'
+  ?0:Number(o.commission||0);
+
+ const received=Number(o.price||0)+Number(o.extra||0);
+ const totalMemberPayable=salary+commissionTotal+totalClaims;
+ const net=received-totalMemberPayable-expenseTotal-legacyCommission;
+
+ const unpaidAssignments=assignments.filter(a=>!a.paid);
+ const paidAssignments=assignments.filter(a=>a.paid);
+ const unpaidCommissions=commissions.filter(c=>!c.paid);
+ const paidCommissions=commissions.filter(c=>c.paid);
+
+ function commissionAmount(c){
+  return Number(c.commission??(
+   Number(o.price||0)*Number(c.commissionRate||0)/100
+  ));
+ }
+
+ function assignmentTotal(a){
+  const commission=separateCommissions?0:Number(
+   a.commission??(
+    Number(o.price||0)*Number(a.commissionRate||0)/100
+   )
+  );
+  const claimTotal=(a.claims||[]).reduce(
+   (s,c)=>s+Number(c.amount||0),0
+  );
+  return Number(a.salary||0)+commission+claimTotal;
+ }
+
+ function assignmentTable(list){
+  return <div className="table-wrap">
+   <table>
+    <thead>
+     <tr>
+      <th>MEMBER</th>
+      <th>ROLE</th>
+      <th>SALARY</th>
+      {!separateCommissions&&<th>COMMISSION</th>}
+      <th>CLAIMS</th>
+      <th>TOTAL</th>
+      <th>PAID DATE</th>
+     </tr>
+    </thead>
+    <tbody>
+     {list.map((a,i)=>{
+      const claimTotal=(a.claims||[]).reduce(
+       (s,c)=>s+Number(c.amount||0),0
+      );
+      return <tr key={a.id||a.performerId||i}>
+       <td><b>{a.name||'Unnamed member'}</b></td>
+       <td>{a.roleName||'-'}</td>
+       <td>{money(a.salary)}</td>
+       {!separateCommissions&&
+        <td>{money(a.commission??(
+         Number(o.price||0)*Number(a.commissionRate||0)/100
+        ))}</td>
+       }
+       <td>{money(claimTotal)}</td>
+       <td><b>{money(assignmentTotal(a))}</b></td>
+       <td>{a.paidDate||'-'}</td>
+      </tr>;
+     })}
+    </tbody>
+   </table>
+   {!list.length&&
+    <p className="muted">No records in this section.</p>
+   }
+  </div>;
+ }
+
+ function commissionTable(list){
+  return <div className="table-wrap">
+   <table>
+    <thead>
+     <tr>
+      <th>MEMBER</th>
+      <th>COMMISSION RATE</th>
+      <th>COMMISSION</th>
+      <th>PAID DATE</th>
+     </tr>
+    </thead>
+    <tbody>
+     {list.map((c,i)=>
+      <tr key={c.id||c.performerId||i}>
+       <td><b>{c.name||'Unnamed member'}</b></td>
+       <td>{Number(c.commissionRate||0)}%</td>
+       <td>{money(commissionAmount(c))}</td>
+       <td>{c.paidDate||'-'}</td>
+      </tr>
+     )}
+    </tbody>
+   </table>
+   {!list.length&&
+    <p className="muted">No commission records in this section.</p>
+   }
+  </div>;
+ }
+
+ return <>
+  <Modal title="Event details" onClose={onClose} wide>
+   <div className="detail-grid">
+    <div><small>Event</small><b>{o.event||'Untitled event'}</b></div>
+    <div><small>Order ID</small><b>{o.orderNo||'-'}</b></div>
+    <div><small>Date</small><b>{o.date||'-'}</b></div>
+    <div><small>Location</small><b>{o.location||'-'}</b></div>
+    <div><small>Customer / organizer</small><b>{o.customer||'-'}</b></div>
+    <div><small>Payment status</small><b>{o.paymentStatus||'Pending'}</b></div>
+   </div>
+
+   <div className="subsection">
+    <h3>Event finances</h3>
+    <div className="detail-grid">
+     <div><small>Order price</small><b>{money(o.price)}</b></div>
+     <div><small>Additional money</small><b>{money(o.extra)}</b></div>
+     <div><small>Total order value</small><b>{money(received)}</b></div>
+     <div><small>Member salaries</small><b>{money(salary)}</b></div>
+     <div><small>Member commissions</small><b>{money(commissionTotal)}</b></div>
+     <div><small>Additional member pay</small><b>{money(totalClaims)}</b></div>
+     <div><small>Event expenses</small><b>{money(expenseTotal)}</b></div>
+     {legacyCommission>0&&
+      <div><small>Previous order commission</small><b>{money(legacyCommission)}</b></div>
+     }
+     <div><small>Total member payment</small><b>{money(totalMemberPayable)}</b></div>
+     <div><small>Net earnings</small><b>{money(net)}</b></div>
+    </div>
+   </div>
+
+   <Panel title="Unpaid member payments" subtitle="Member salaries and additional claims that have not been paid.">
+    {assignmentTable(unpaidAssignments)}
+   </Panel>
+
+   {separateCommissions&&
+    <Panel title="Unpaid commissions" subtitle="Commission payments that have not been paid.">
+     {commissionTable(unpaidCommissions)}
+    </Panel>
+   }
+
+   <Panel title="Paid member payments" subtitle="Historical paid records for this order.">
+    {assignmentTable(paidAssignments)}
+   </Panel>
+
+   {separateCommissions&&
+    <Panel title="Paid commissions" subtitle="Historical paid commission records for this order.">
+     {commissionTable(paidCommissions)}
+    </Panel>
+   }
+
+   <Panel title="Additional member pay" subtitle="Individual claims recorded for this event.">
+    <div className="table-wrap">
+     <table>
+      <thead>
+       <tr>
+        <th>MEMBER</th><th>CATEGORY</th><th>DESCRIPTION</th>
+        <th>DATE</th><th>AMOUNT</th>
+       </tr>
+      </thead>
+      <tbody>
+       {claims.map((c,i)=>
+        <tr key={c.id||i}>
+         <td>{c.memberName}</td>
+         <td>{c.category||'Other'}</td>
+         <td>{c.description||'-'}</td>
+         <td>{c.date||'-'}</td>
+         <td>{money(c.amount)}</td>
+        </tr>
+       )}
+      </tbody>
+     </table>
+     {!claims.length&&
+      <p className="muted">No additional pay claims for this event.</p>
+     }
+    </div>
+   </Panel>
+
+   <Panel title="Event expenses">
+    <div className="table-wrap">
+     <table>
+      <thead>
+       <tr><th>TYPE</th><th>DESCRIPTION</th><th>DATE</th><th>AMOUNT</th></tr>
+      </thead>
+      <tbody>
+       {expenses.map((e,i)=>
+        <tr key={e.id||i}>
+         <td>{e.type||'-'}</td>
+         <td>{e.description||'-'}</td>
+         <td>{e.date||'-'}</td>
+         <td>{money(e.amount)}</td>
+        </tr>
+       )}
+      </tbody>
+     </table>
+     {!expenses.length&&
+      <p className="muted">No event expenses recorded.</p>
+     }
+    </div>
+   </Panel>
+
+   {o.notes&&
+    <Panel title="Notes"><p>{o.notes}</p></Panel>
+   }
+
+   <div className="modal-actions">
+    <button className="btn outline" onClick={onClose}>Close</button>
+    <button className="btn primary" onClick={onEdit}>
+     <Pencil size={15}/> Edit event
+    </button>
+   </div>
+  </Modal>
+ </>;
+}
+function Performers({performers,orders,addPerson,update,notify,roles=[]}){
+ const [name,setName]=useState('');
+ const [q,setQ]=useState('');
+ const [selected,setSelected]=useState(null);
+ const [editName,setEditName]=useState('');
+ const [editRoles,setEditRoles]=useState([]);
+
+ const list=performers.filter(p=>
+  (p.name||'').toLowerCase().includes(q.toLowerCase())
+ );
+
+ function getHistory(p){
+  return orders.flatMap(o=>
+   (o.assignments||[])
+    .filter(a=>a.performerId===p.id)
+    .map(a=>({
+     ...a,
+     event:o.event,
+     date:o.date,
+     orderNo:o.orderNo,
+     orderId:o.id,
+     paidDate:a.paidDate||'',
+     claims:a.claims||[]
+    }))
+  );
+ }
+
+ function getUnpaid(p){
+  let total=0;
+
+  orders.forEach(o=>{
+   const separate=Array.isArray(o.commissionAssignments);
+
+   (o.assignments||[])
+    .filter(a=>a.performerId===p.id&&!a.paid)
+    .forEach(a=>{
+     total+=Number(a.salary||0);
+     total+=(a.claims||[]).reduce(
+      (s,c)=>s+Number(c.amount||0),0
+     );
+
+     if(!separate){
+      total+=Number(a.commission??(
+       Number(o.price||0)*Number(a.commissionRate||0)/100
+      ));
+     }
+    });
+
+   (o.commissionAssignments||[])
+    .filter(c=>c.performerId===p.id&&!c.paid)
+    .forEach(c=>{
+     total+=Number(c.commission??(
+      Number(o.price||0)*Number(c.commissionRate||0)/100
+     ));
+    });
+  });
+
+  return total;
+ }
+
+ function openMember(p){
+  setSelected(p);
+  setEditName(p.name||'');
+  setEditRoles(Array.isArray(p.availableRoles)?p.availableRoles:[]);
+ }
+
+ function toggleRole(roleName){
+  setEditRoles(current=>
+   current.includes(roleName)
+    ?current.filter(r=>r!==roleName)
+    :[...current,roleName]
+  );
+ }
+
+ function saveMember(){
+  if(!editName.trim()){
+   notify('Please enter the member name.');
+   return;
+  }
+
+  update({
+   performers:performers.map(p=>
+    p.id===selected.id
+     ?{
+       ...p,
+       name:editName.trim(),
+       availableRoles:editRoles
+      }
+     :p
+   )
+  });
+
+  setSelected(p=>({
+   ...p,
+   name:editName.trim(),
+   availableRoles:editRoles
+  }));
+
+  notify('Member details updated.');
+ }
+
+ function remove(p){
+  if(!confirm(
+   `Remove ${p.name} from the member directory? Historical order records will remain.`
+  ))return;
+
+  update({
+   performers:performers.filter(x=>x.id!==p.id)
+  });
+
+  if(selected?.id===p.id)setSelected(null);
+  notify('Member removed.');
+ }
+
+ function add(){
+  if(!name.trim()){
+   notify('Please enter a member name.');
+   return;
+  }
+
+  addPerson(name.trim());
+  setName('');
+  notify('Member added.');
+ }
+
+ const history=selected?getHistory(selected):[];
+
+ return <>
+  <Heading
+   eyebrow="TEAM DIRECTORY"
+   title="Members"
+   desc="Manage your club members and view their event participation."
+  />
+
+  <div className="panel">
+   <div className="panel-head">
+    <div>
+     <h3>Add member</h3>
+     <p>Add a member to your club directory.</p>
+    </div>
+   </div>
+
+   <div className="assignment-add">
+    <input
+     value={name}
+     onChange={e=>setName(e.target.value)}
+     placeholder="Enter member name"
+     onKeyDown={e=>e.key==='Enter'&&add()}
+    />
+    <button className="btn primary" onClick={add}>
+     <UserPlus size={15}/> Add member
+    </button>
+   </div>
+  </div>
+
+  <div className="panel">
+   <div className="panel-head">
+    <div>
+     <h3>Member directory</h3>
+     <p>{performers.length} registered member(s)</p>
+    </div>
+    <div className="search-box">
+     <Search size={15}/>
+     <input
+      value={q}
+      onChange={e=>setQ(e.target.value)}
+      placeholder="Search by member name..."
+     />
+    </div>
+   </div>
+
+   <div className="member-list">
+    {list.map(p=>{
+     const unpaid=getUnpaid(p);
+     const memberHistory=getHistory(p);
+
+     return <div
+      className="member-card"
+      key={p.id}
+      onClick={()=>openMember(p)}
+      style={{cursor:'pointer'}}
+     >
+      <div className="member-card-head">
+       <div>
+        <h3>{p.name}</h3>
+        <small>{memberHistory.length} event participation(s)</small>
+       </div>
+       <div style={{display:'flex',alignItems:'center',gap:8}}>
+        <span style={{
+         color:unpaid>0?'#dc2626':'#16a34a',
+         fontWeight:700
+        }}>
+         {money(unpaid)} unpaid
+        </span>
+        <button
+         className="icon-button danger"
+         title="Remove member"
+         onClick={e=>{
+          e.stopPropagation();
+          remove(p);
+         }}
+        >
+         <Trash2 size={16}/>
+        </button>
+       </div>
+      </div>
+      <div className="muted">
+       {(p.availableRoles||[]).length
+        ?p.availableRoles.join(' · ')
+        :'No available roles set'}
+      </div>
+      <small className="muted">Click to view member details</small>
+     </div>;
+    })}
+
+    {!list.length&&
+     <Empty
+      title={q?'No matching members':'No members yet'}
+      desc={q?'Try another search term.':'Add your first member above.'}
+     />
+    }
+   </div>
+  </div>
+
+  {selected&&
+   <Modal
+    title="Member details"
+    onClose={()=>setSelected(null)}
+    wide
+   >
+    <div className="form-grid">
+     <Field label="Member name">
+      <input
+       value={editName}
+       onChange={e=>setEditName(e.target.value)}
+      />
+     </Field>
+    </div>
+
+    <div className="subsection">
+     <h3>Available roles</h3>
+     <p className="muted">Select the roles this member is available to perform.</p>
+     <div style={{
+      display:'grid',
+      gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',
+      gap:10
+     }}>
+      {roles.map(r=>{
+       const roleName=typeof r==='string'?r:r.name;
+       if(!roleName)return null;
+
+       return <label
+        key={roleName}
+        style={{display:'flex',alignItems:'center',gap:8}}
+       >
+        <input
+         type="checkbox"
+         checked={editRoles.includes(roleName)}
+         onChange={()=>toggleRole(roleName)}
+        />
+        {roleName}
+       </label>;
+      })}
+     </div>
+     {!roles.length&&
+      <p className="muted">Add roles in Settings first.</p>
+     }
+    </div>
+
+    <div className="modal-actions">
+     <button className="btn primary" onClick={saveMember}>
+      <Save size={15}/> Save member details
+     </button>
+    </div>
+
+    <Panel
+     title="Participation history"
+     subtitle="Events this member has participated in."
+    >
+     <div className="table-wrap">
+      <table>
+       <thead>
+        <tr>
+         <th>EVENT</th>
+         <th>DATE</th>
+         <th>ROLE</th>
+         <th>SALARY</th>
+         <th>CLAIMS</th>
+         <th>PAYMENT STATUS</th>
+         <th>PAID DATE</th>
+        </tr>
+       </thead>
+       <tbody>
+        {history.map((a,i)=>{
+         const claimTotal=(a.claims||[]).reduce(
+          (s,c)=>s+Number(c.amount||0),0
+         );
+
+         return <tr key={a.id||a.orderId+'-'+i}>
+          <td>{a.event||a.orderNo||'-'}</td>
+          <td>{a.date||'-'}</td>
+          <td>{a.roleName||'-'}</td>
+          <td>{money(a.salary)}</td>
+          <td>{money(claimTotal)}</td>
+          <td>
+           <span className={'status '+(a.paid?'good':'pending')}>
+            {a.paid?'Paid':'Unpaid'}
+           </span>
+          </td>
+          <td>{a.paidDate||'-'}</td>
+         </tr>;
+        })}
+       </tbody>
+      </table>
+      {!history.length&&
+       <p className="muted">No event participation history yet.</p>
+      }
+     </div>
+    </Panel>
+   </Modal>
+  }
+ </>;
+}
+function Salary({orders,update,notify}){
+ const [editing,setEditing]=useState(null);
+ const [expanded,setExpanded]=useState(null);
+ const [form,setForm]=useState({
+  salary:'',
+  claims:[]
+ });
+ const [claimDraft,setClaimDraft]=useState({
+  category:'Medical',
+  description:'',
+  date:today(),
+  amount:''
+ });
+
+ const [expenseDraft,setExpenseDraft]=useState({
+  orderId:orders[0]?.id||'',
+  type:'Other',
+  description:'',
+  date:today(),
+  amount:''
+ });
+
+ function updateOrder(orderId,callback){
+  update({
+   orders:orders.map(o=>
+    o.id===orderId?callback(o):o
+   )
+  });
+ }
+
+ function assignmentTotal(o,a){
+  const separate=Array.isArray(o.commissionAssignments);
+  const commission=separate?0:Number(
+   a.commission??(
+    Number(o.price||0)*Number(a.commissionRate||0)/100
+   )
+  );
+  const claims=(a.claims||[]).reduce(
+   (s,c)=>s+Number(c.amount||0),0
+  );
+  return Number(a.salary||0)+commission+claims;
+ }
+
+ function commissionAmount(o,c){
+  return Number(c.commission??(
+   Number(o.price||0)*Number(c.commissionRate||0)/100
+  ));
+ }
+
+ function getUnpaid(o){
+  const assignments=(o.assignments||[])
+   .filter(a=>!a.paid);
+
+  const commissions=(o.commissionAssignments||[])
+   .filter(c=>!c.paid);
+
+  return {
+   assignments,
+   commissions,
+   total:
+    assignments.reduce((s,a)=>s+assignmentTotal(o,a),0)+
+    commissions.reduce((s,c)=>s+commissionAmount(o,c),0)
+  };
+ }
+
+ const unpaidOrders=orders.map(o=>({
+  ...o,
+  unpaid:getUnpaid(o)
+ })).filter(o=>
+  o.unpaid.assignments.length||
+  o.unpaid.commissions.length
+ );
+
+ const outstanding=unpaidOrders.reduce(
+  (s,o)=>s+o.unpaid.total,0
+ );
+
+ function markAssignmentPaid(o,a){
+  if(!confirm(
+   `Mark ${a.name||'this member'}'s payment for "${o.event}" as paid?`
+  ))return;
+
+  updateOrder(o.id,current=>({
+   ...current,
+   assignments:(current.assignments||[]).map(x=>
+    x.id===a.id
+     ?{...x,paid:true,paidDate:today()}
+     :x
+   )
+  }));
+
+  notify('Member payment marked as paid.');
+ }
+
+ function markCommissionPaid(o,c){
+  if(!confirm(
+   `Mark ${c.name||'this member'}'s commission for "${o.event}" as paid?`
+  ))return;
+
+  updateOrder(o.id,current=>({
+   ...current,
+   commissionAssignments:(current.commissionAssignments||[]).map(x=>
+    x.id===c.id
+     ?{...x,paid:true,paidDate:today()}
+     :x
+   )
+  }));
+
+  notify('Commission marked as paid.');
+ }
+
+ function openEdit(o,a){
+  const index=(o.assignments||[]).findIndex(x=>x.id===a.id);
+
+  setEditing({
+   orderId:o.id,
+   index,
+   event:o.event,
+   orderPrice:Number(o.price||0),
+   name:a.name||''
+  });
+
+  setForm({
+   salary:String(a.salary??0),
+   claims:(a.claims||[]).map(c=>({...c}))
+  });
+ }
+
+ function addClaim(){
+  const amount=Number(claimDraft.amount);
+
+  if(!claimDraft.description.trim()){
+   notify('Please enter a claim description.');
+   return;
+  }
+
+  if(!claimDraft.date){
+   notify('Please select a claim date.');
+   return;
+  }
+
+  if(!Number.isFinite(amount)||amount<=0){
+   notify('Please enter a valid claim amount.');
+   return;
+  }
+
+  setForm(x=>({
+   ...x,
+   claims:[
+    ...x.claims,
+    {
+     id:uid(),
+     category:claimDraft.category,
+     description:claimDraft.description.trim(),
+     date:claimDraft.date,
+     amount
+    }
+   ]
+  }));
+
+  setClaimDraft({
+   category:'Medical',
+   description:'',
+   date:today(),
+   amount:''
+  });
+ }
+
+ function removeClaim(id){
+  setForm(x=>({
+   ...x,
+   claims:x.claims.filter(c=>c.id!==id)
+  }));
+ }
+
+ function saveEdit(){
+  if(!editing)return;
+
+  const salary=Number(form.salary);
+
+  if(!Number.isFinite(salary)||salary<0){
+   notify('Please enter a valid salary.');
+   return;
+  }
+
+  const claims=form.claims.map(c=>({
+   ...c,
+   amount:Number(c.amount||0)
+  }));
+
+  updateOrder(editing.orderId,o=>({
+   ...o,
+   assignments:(o.assignments||[]).map((a,i)=>
+    i===editing.index
+     ?{
+       ...a,
+       salary,
+       claims
+      }
+     :a
+   )
+  }));
+
+  setEditing(null);
+  notify('Member payment updated.');
+ }
+
+ function addExpense(){
+  const amount=Number(expenseDraft.amount);
+
+  if(!expenseDraft.orderId){
+   notify('Please select an order.');
+   return;
+  }
+
+  if(!expenseDraft.description.trim()){
+   notify('Please enter an expense description.');
+   return;
+  }
+
+  if(!expenseDraft.date){
+   notify('Please select an expense date.');
+   return;
+  }
+
+  if(!Number.isFinite(amount)||amount<=0){
+   notify('Please enter a valid expense amount.');
+   return;
+  }
+
+  updateOrder(expenseDraft.orderId,o=>({
+   ...o,
+   expenses:[
+    ...(o.expenses||[]),
+    {
+     id:uid(),
+     type:expenseDraft.type,
+     description:expenseDraft.description.trim(),
+     date:expenseDraft.date,
+     amount
+    }
+   ]
+  }));
+
+  setExpenseDraft(x=>({
+   ...x,
+   description:'',
+   amount:'',
+   date:today()
+  }));
+
+  notify('Additional expense added.');
+ }
+
+ function removeExpense(orderId,expenseId){
+  if(!confirm('Remove this expense?'))return;
+
+  updateOrder(orderId,o=>({
+   ...o,
+   expenses:(o.expenses||[]).filter(e=>e.id!==expenseId)
+  }));
+
+  notify('Expense removed.');
+ }
+
+ const allExpenses=orders.flatMap(o=>
+  (o.expenses||[]).map(e=>({
+   ...e,
+   orderId:o.id,
+   event:o.event,
+   orderNo:o.orderNo
+  }))
+ );
+
+ return <>
+  <Heading
+   eyebrow="PAYMENT MANAGEMENT"
+   title="Payment"
+   desc="Manage outstanding member salaries, commissions and additional expenses."
+  />
+
+  <div className="stats-grid">
+   <Stat
+    label="Unpaid orders"
+    value={unpaidOrders.length}
+    sub="Orders with outstanding payments"
+    icon={Wallet}
+   />
+   <Stat
+    label="Unpaid records"
+    value={unpaidOrders.reduce(
+     (s,o)=>s+o.unpaid.assignments.length+o.unpaid.commissions.length,0
+    )}
+    sub="Member and commission payments"
+    icon={Users}
+   />
+   <Stat
+    label="Total outstanding"
+    value={money(outstanding)}
+    sub="Amount yet to be paid"
+    icon={Calculator}
+   />
+  </div>
+
+  <Panel
+   title="Unpaid orders"
+   subtitle="Only orders with outstanding member payments or commissions are shown here."
+  >
+   {!unpaidOrders.length?
+    <Empty
+     title="No unpaid payments"
+     desc="All member payments and commissions have been paid."
+    />
+    :
+    <div className="member-list">
+     {unpaidOrders.map(o=>{
+      const isOpen=expanded===o.id;
+
+      return <div className="member-card" key={o.id}>
+       <div
+        className="member-card-head"
+        style={{cursor:'pointer'}}
+        onClick={()=>setExpanded(isOpen?null:o.id)}
+       >
+        <div>
+         <h3>{o.event||'Untitled event'}</h3>
+         <small>
+          {o.orderNo||'No order number'} · {o.date||'No date'}
+         </small>
+        </div>
+        <div style={{
+         display:'flex',
+         alignItems:'center',
+         gap:12
+        }}>
+         <div style={{textAlign:'right'}}>
+          <b style={{color:'#dc2626'}}>{money(o.unpaid.total)}</b>
+          <small style={{display:'block'}}>Outstanding</small>
+         </div>
+         <button className="icon-button" type="button">
+          {isOpen?<X size={16}/>:<Search size={16}/>}
+         </button>
+        </div>
+       </div>
+
+       {isOpen&&
+        <div className="subsection">
+         <div className="table-wrap">
+          <table>
+           <thead>
+            <tr>
+             <th>MEMBER</th>
+             <th>ROLE</th>
+             <th>SALARY</th>
+             <th>COMMISSION</th>
+             <th>CLAIMS</th>
+             <th>UNPAID AMOUNT</th>
+             <th>ACTIONS</th>
+            </tr>
+           </thead>
+           <tbody>
+            {o.unpaid.assignments.map((a,i)=>{
+             const claims=(a.claims||[]).reduce(
+              (s,c)=>s+Number(c.amount||0),0
+             );
+             const separate=Array.isArray(o.commissionAssignments);
+             const commission=separate?0:Number(
+              a.commission??(
+               Number(o.price||0)*Number(a.commissionRate||0)/100
+              )
+             );
+
+             return <tr key={a.id||i}>
+              <td><b>{a.name||'-'}</b></td>
+              <td>{a.roleName||'-'}</td>
+              <td>{money(a.salary)}</td>
+              <td>{separate?'-':money(commission)}</td>
+              <td>{money(claims)}</td>
+              <td><b>{money(assignmentTotal(o,a))}</b></td>
+              <td>
+               <div className="table-actions">
+                <button
+                 className="icon-button"
+                 title="Edit payment"
+                 onClick={()=>openEdit(o,a)}
+                >
+                 <Pencil size={15}/>
+                </button>
+                <button
+                 className="btn small primary"
+                 onClick={()=>markAssignmentPaid(o,a)}
+                >
+                 <Check size={14}/> Mark paid
+                </button>
+               </div>
+              </td>
+             </tr>;
+            })}
+
+            {o.unpaid.commissions.map((c,i)=>
+             <tr key={c.id||'commission-'+i}>
+              <td><b>{c.name||'Unnamed member'}</b></td>
+              <td>Commission</td>
+              <td>-</td>
+              <td>{Number(c.commissionRate||0)}%</td>
+              <td>-</td>
+              <td><b>{money(commissionAmount(o,c))}</b></td>
+              <td>
+               <button
+                className="btn small primary"
+                onClick={()=>markCommissionPaid(o,c)}
+               >
+                <Check size={14}/> Mark paid
+               </button>
+              </td>
+             </tr>
+            )}
+           </tbody>
+          </table>
+         </div>
+        </div>
+       }
+      </div>;
+     })}
+    </div>
+   }
+  </Panel>
+
+  <Panel
+   title="Additional expenses"
+   subtitle="Record event expenses such as medical costs, transportation, parking or equipment."
+  >
+   <div className="form-grid">
+    <Field label="Order / event">
+     <select
+      value={expenseDraft.orderId}
+      onChange={e=>setExpenseDraft(x=>({...x,orderId:e.target.value}))}
+     >
+      <option value="">Select an order</option>
+      {orders.map(o=>
+       <option key={o.id} value={o.id}>
+        {o.event||o.orderNo||'Untitled order'}
+       </option>
+      )}
+     </select>
+    </Field>
+
+    <Field label="Expense category">
+     <select
+      value={expenseDraft.type}
+      onChange={e=>setExpenseDraft(x=>({...x,type:e.target.value}))}
+     >
+      <option>Medical</option>
+      <option>Transportation</option>
+      <option>Food</option>
+      <option>Toll</option>
+      <option>Parking</option>
+      <option>Equipment</option>
+      <option>Other</option>
+     </select>
+    </Field>
+
+    <Field label="Description">
+     <input
+      value={expenseDraft.description}
+      onChange={e=>setExpenseDraft(x=>({...x,description:e.target.value}))}
+      placeholder="e.g. First aid supplies"
+     />
+    </Field>
+
+    <Field label="Date">
+     <input
+      type="date"
+      value={expenseDraft.date}
+      onChange={e=>setExpenseDraft(x=>({...x,date:e.target.value}))}
+     />
+    </Field>
+
+    <Field label="Amount (RM)">
+     <input
+      type="number"
+      min="0"
+      step="0.01"
+      value={expenseDraft.amount}
+      onChange={e=>setExpenseDraft(x=>({...x,amount:e.target.value}))}
+     />
+    </Field>
+   </div>
+
+   <button
+    className="btn primary"
+    onClick={addExpense}
+    disabled={!orders.length}
+   >
+    <Plus size={15}/> Add expense
+   </button>
+
+   <div className="subsection">
+    <h3>Recorded expenses</h3>
+    <div className="table-wrap">
+     <table>
+      <thead>
+       <tr>
+        <th>EVENT</th>
+        <th>CATEGORY</th>
+        <th>DESCRIPTION</th>
+        <th>DATE</th>
+        <th>AMOUNT</th>
+        <th>ACTION</th>
+       </tr>
+      </thead>
+      <tbody>
+       {allExpenses.map((e,i)=>
+        <tr key={e.id||i}>
+         <td>{e.event||e.orderNo||'-'}</td>
+         <td>{e.type||'-'}</td>
+         <td>{e.description||'-'}</td>
+         <td>{e.date||'-'}</td>
+         <td>{money(e.amount)}</td>
+         <td>
+          <button
+           className="icon-button danger"
+           title="Remove expense"
+           onClick={()=>removeExpense(e.orderId,e.id)}
+          >
+           <Trash2 size={15}/>
+          </button>
+         </td>
+        </tr>
+       )}
+      </tbody>
+     </table>
+     {!allExpenses.length&&
+      <p className="muted">No additional expenses recorded yet.</p>
+     }
+    </div>
+   </div>
+  </Panel>
+
+  {editing&&
+   <Modal
+    title="Edit unpaid member payment"
+    onClose={()=>setEditing(null)}
+    wide
+   >
+    <div className="account-note">
+     <Wallet size={17}/>
+     <span>
+      Editing the unpaid payment for {editing.name} — {editing.event}.
+     </span>
+    </div>
+
+    <Field label="Salary (RM)">
+     <input
+      type="number"
+      min="0"
+      step="0.01"
+      value={form.salary}
+      onChange={e=>setForm(x=>({...x,salary:e.target.value}))}
+     />
+    </Field>
+
+    <div className="subsection">
+     <div className="subsection-head">
+      <div>
+       <h3>Additional pay claims</h3>
+       <p>Record medical, food, toll, parking and other claims for this member.</p>
+      </div>
+     </div>
+
+     {(form.claims||[]).map(c=>
+      <div className="history-row" key={c.id}>
+       <span>
+        <b>{c.category||'Other'}</b> · {c.description}
+        <small>{c.date||'-'}</small>
+       </span>
+       <b>{money(c.amount)}</b>
+       <button
+        className="icon-button danger"
+        title="Remove claim"
+        onClick={()=>removeClaim(c.id)}
+       >
+        <Trash2 size={14}/>
+       </button>
+      </div>
+     )}
+
+     {!form.claims.length&&
+      <p className="muted">No additional claims recorded.</p>
+     }
+
+     <div className="form-grid">
+      <Field label="Category">
+       <select
+        value={claimDraft.category}
+        onChange={e=>setClaimDraft(x=>({...x,category:e.target.value}))}
+       >
+        <option>Medical</option>
+        <option>Food</option>
+        <option>Toll</option>
+        <option>Parking</option>
+        <option>Transportation</option>
+        <option>Equipment</option>
+        <option>Other</option>
+       </select>
+      </Field>
+
+      <Field label="Claim date">
+       <input
+        type="date"
+        value={claimDraft.date}
+        onChange={e=>setClaimDraft(x=>({...x,date:e.target.value}))}
+       />
+      </Field>
+
+      <Field label="Description">
+       <input
+        value={claimDraft.description}
+        onChange={e=>setClaimDraft(x=>({...x,description:e.target.value}))}
+        placeholder="e.g. Medical expenses after performance"
+       />
+      </Field>
+
+      <Field label="Amount (RM)">
+       <input
+        type="number"
+        min="0"
+        step="0.01"
+        value={claimDraft.amount}
+        onChange={e=>setClaimDraft(x=>({...x,amount:e.target.value}))}
+       />
+      </Field>
+     </div>
+
+     <button className="btn outline" onClick={addClaim}>
+      <Plus size={15}/> Add claim
+     </button>
+    </div>
+
+    <div className="sub-total">
+     <span>Salary</span>
+     <b>{money(form.salary)}</b>
+    </div>
+    <div className="sub-total">
+     <span>Additional claims</span>
+     <b>{money(form.claims.reduce((s,c)=>s+Number(c.amount||0),0))}</b>
+    </div>
+    <div className="sub-total">
+     <span>Total member payment</span>
+     <b>
+      {money(
+       Number(form.salary||0)+
+       form.claims.reduce((s,c)=>s+Number(c.amount||0),0)
+      )}
+     </b>
+    </div>
+
+    <div className="modal-actions">
+     <button className="btn outline" onClick={()=>setEditing(null)}>
+      Cancel
+     </button>
+     <button className="btn primary" onClick={saveEdit}>
+      <Save size={15}/> Save changes
+     </button>
+    </div>
+   </Modal>
+  }
+ </>;
+}
+function Finance({orders,update,notify}){
+ const [selected,setSelected]=useState(orders[0]?.id||'');
+ const [type,setType]=useState('Transportation');
+ const [desc,setDesc]=useState('');
+ const [amount,setAmount]=useState('');
+
+ const order=orders.find(o=>o.id===selected);
+ const assignments=order?.assignments||[];
+
+ function addExpense(){
+  if(!order||Number(amount)<=0)return;
+
+  update({
+   orders:orders.map(o=>o.id===selected
+    ?{
+      ...o,
+      expenses:[
+       ...(o.expenses||[]),
+       {
+        id:uid(),
+        type,
+        description:desc,
+        amount:Number(amount),
+        date:today()
+       }
+      ]
+     }
+    :o
+   )
+  });
+
+  setDesc('');
+  setAmount('');
+  notify('Expense recorded');
+ }
+
+ const income=Number(order?.price||0)+Number(order?.extra||0);
+
+ const memberSalary=assignments.reduce(
+  (sum,a)=>sum+Number(a.salary||0),0
+ );
+
+ const memberCommission=assignments.reduce(
+  (sum,a)=>sum+Number(
+   a.commission??(
+    Number(order?.price||0)*Number(a.commissionRate||0)/100
+   )
+  ),0
+ );
+
+ const memberClaims=assignments.reduce(
+  (sum,a)=>sum+(a.claims||[]).reduce(
+   (s,c)=>s+Number(c.amount||0),0
+  ),0
+ );
+
+ const legacyCommission=
+  order?.commissionMode==='members'
+   ?0
+   :Number(order?.commission||0);
+
+ const totalCommission=memberCommission+legacyCommission;
+
+ const expenses=(order?.expenses||[]).reduce(
+  (sum,e)=>sum+Number(e.amount||0),0
+ );
+
+ const totalMemberPay=memberSalary+memberCommission+memberClaims;
+
+ const net=income-totalMemberPay-legacyCommission-expenses;
+
+ return <>
+  <Heading
+   eyebrow="CLUB FINANCES"
+   title="Finance calculator"
+   desc="Review member payments, commissions, claims and event expenses."
+  />
+
+  <div className="finance-select">
+   <label>
+    Select order
+    <select
+     value={selected}
+     onChange={e=>setSelected(e.target.value)}
+    >
+     <option value="">Choose an order</option>
+     {orders.map(o=>
+      <option key={o.id} value={o.id}>
+       {o.orderNo} · {o.event}
+      </option>
+     )}
+    </select>
+   </label>
+  </div>
+
+  {order?<>
+   <div className="finance-grid">
+    <div className="finance-card">
+     <span>Order income</span>
+     <b>{money(income)}</b>
+    </div>
+
+    <div className="finance-card">
+     <span>Member salaries</span>
+     <b>{money(memberSalary)}</b>
+    </div>
+
+    <div className="finance-card">
+     <span>Member commissions</span>
+     <b>{money(memberCommission)}</b>
+    </div>
+
+    <div className="finance-card">
+     <span>Additional member claims</span>
+     <b>{money(memberClaims)}</b>
+    </div>
+
+    <div className="finance-card">
+     <span>Event expenses</span>
+     <b>{money(expenses)}</b>
+    </div>
+
+    <div className="finance-card net-card">
+     <span>Net earnings</span>
+     <b>{money(net)}</b>
+     <small>
+      Income − member payments − legacy commission − event expenses
+     </small>
+    </div>
+   </div>
+
+   <Panel
+    title="Member payment breakdown"
+    desc="Each member's salary, commission and additional claims."
+   >
+    <div className="table-wrap">
+     <table>
+      <thead>
+       <tr>
+        <th>MEMBER</th>
+        <th>ROLE</th>
+        <th>SALARY</th>
+        <th>COMMISSION</th>
+        <th>CLAIMS</th>
+        <th>TOTAL PAYABLE</th>
+        <th>PAYMENT</th>
+       </tr>
+      </thead>
+
+      <tbody>
+       {assignments.map((a,i)=>{
+        const commission=Number(
+         a.commission??(
+          Number(order.price||0)*Number(a.commissionRate||0)/100
+         )
+        );
+
+        const claimTotal=(a.claims||[]).reduce(
+         (sum,c)=>sum+Number(c.amount||0),0
+        );
+
+        const total=
+         Number(a.salary||0)+commission+claimTotal;
+
+        return <tr key={a.id||a.performerId||i}>
+         <td><b>{a.name||'Unnamed member'}</b></td>
+         <td>{a.roleName||'-'}</td>
+         <td>{money(a.salary)}</td>
+         <td>{money(commission)}</td>
+         <td>{money(claimTotal)}</td>
+         <td><b>{money(total)}</b></td>
+         <td>
+          <span className={'status '+(a.paid?'good':'pending')}>
+           {a.paid?'Paid':'Unpaid'}
+          </span>
+         </td>
+        </tr>;
+       })}
+      </tbody>
+     </table>
+
+     {!assignments.length&&
+      <p className="muted">No members have been assigned to this order.</p>
+     }
+    </div>
+
+    <div className="detail-grid">
+     <div>
+      <small>Total member payments</small>
+      <b>{money(totalMemberPay)}</b>
+     </div>
+     <div>
+      <small>Total member commission</small>
+      <b>{money(memberCommission)}</b>
+     </div>
+    </div>
+   </Panel>
+
+   <Panel
+    title="Additional member claims"
+    desc="Individual claims such as toll, food, parking and other costs."
+   >
+    <div className="table-wrap">
+     <table>
+      <thead>
+       <tr>
+        <th>MEMBER</th>
+        <th>CATEGORY</th>
+        <th>DESCRIPTION</th>
+        <th>DATE</th>
+        <th>AMOUNT</th>
+       </tr>
+      </thead>
+
+      <tbody>
+       {assignments.flatMap((a,i)=>
+        (a.claims||[]).map((c,j)=>
+         <tr key={c.id||`${a.id||a.performerId||i}-${j}`}>
+          <td>{a.name||'Unnamed member'}</td>
+          <td>{c.category||'-'}</td>
+          <td>{c.description||'-'}</td>
+          <td>{c.date||'-'}</td>
+          <td>{money(c.amount)}</td>
+         </tr>
+        )
+       )}
+      </tbody>
+     </table>
+
+     {!assignments.some(a=>(a.claims||[]).length>0)&&
+      <p className="muted">No additional member claims recorded.</p>
+     }
+    </div>
+   </Panel>
+
+   {order.commissionMode!=='members'&&
+    <Panel
+     title="Legacy commission"
+     desc="This is the original order-level commission for older records."
+    >
+     <div className="finance-card">
+      <span>Order-level commission</span>
+      <b>{money(legacyCommission)}</b>
+     </div>
+     <Commission
+      order={order}
+      orders={orders}
+      update={update}
+      notify={notify}
+     />
+    </Panel>
+   }
+
+   <Panel
+    title="Record event expenses"
+    desc="Record club expenses that are separate from individual member claims."
+   >
+    <div className="expense-form">
+     <select value={type} onChange={e=>setType(e.target.value)}>
+      <option>Transportation</option>
+      <option>Food</option>
+      <option>Parking / toll</option>
+      <option>Equipment</option>
+      <option>Other</option>
+     </select>
+
+     <input
+      value={desc}
+      onChange={e=>setDesc(e.target.value)}
+      placeholder="Description"
+     />
+
+     <input
+      type="number"
+      min="0"
+      value={amount}
+      onChange={e=>setAmount(e.target.value)}
+      placeholder="Amount RM"
+     />
+
+     <button className="btn primary" onClick={addExpense}>
+      <Plus size={15}/> Add expense
+     </button>
+    </div>
+
+    <div className="table-wrap">
+     <table>
+      <thead>
+       <tr>
+        <th>TYPE</th>
+        <th>DESCRIPTION</th>
+        <th>DATE</th>
+        <th>AMOUNT</th>
+        <th/>
+       </tr>
+      </thead>
+
+      <tbody>
+       {(order.expenses||[]).map(x=>
+        <tr key={x.id}>
+         <td>{x.type}</td>
+         <td>{x.description}</td>
+         <td>{x.date}</td>
+         <td>{money(x.amount)}</td>
+         <td>
+          <button
+           className="icon-button danger"
+           onClick={()=>
+            update({
+             orders:orders.map(o=>o.id===selected
+              ?{
+                ...o,
+                expenses:(o.expenses||[]).filter(e=>e.id!==x.id)
+               }
+              :o
+             )
+            })
+           }
+          >
+           <Trash2 size={15}/>
+          </button>
+         </td>
+        </tr>
+       )}
+      </tbody>
+     </table>
+
+     {!order.expenses?.length&&
+      <p className="muted">No event expenses recorded yet.</p>
+     }
+    </div>
+   </Panel>
+  </>:<Empty
+   title="Select an order"
+   desc="Choose an order to review member payments and event expenses."
+  />}
+ </>;
+}
+function Commission({order,orders,update,notify}){
+ const [rate,setRate]=useState(String(order.commissionRate??''));
+
+ useEffect(()=>{
+  setRate(String(order.commissionRate??''));
+ },[order.id,order.commissionRate]);
+
+ const base=Number(order.price||0);
+ const result=base*Number(rate||0)/100;
+
+ return <div className="commission-row">
+  <div>
+   <label>Commission rate (%)
+    <input
+     type="number"
+     min="0"
+     max="100"
+     step="0.01"
+     value={rate}
+     onChange={e=>setRate(e.target.value)}
+     placeholder="e.g. 10"
+    />
+   </label>
+   <div className="muted">
+    Based on order price: {money(base)}
+   </div>
+  </div>
+  <div className="commission-result">
+   <small>Calculated commission</small>
+   <b>{money(result)}</b>
+  </div>
+  <button className="btn primary" onClick={()=>{
+   if(rate===''||Number(rate)<0||Number(rate)>100){
+    alert('Please enter a commission percentage between 0 and 100.');
+    return;
+   }
+   update({
+    orders:orders.map(o=>o.id===order.id?{
+     ...o,
+     commissionRate:Number(rate),
+     commission:Number(result.toFixed(2))
+    }:o)
+   });
+   notify('Commission saved to order');
+  }}>
+   Save commission
+  </button>
+ </div>;
+}
+function Utilities({data,update,notify}){const [name,setName]=useState(''),[qty,setQty]=useState('1'),[condition,setCondition]=useState('Good'),[cost,setCost]=useState(''),[purchase,setPurchase]=useState({name:'',qty:'1',cost:'',date:today()});const items=data.utilities||[],purchases=data.purchases||[];function add(){if(!name.trim())return;update({utilities:[...items,{id:uid(),name:name.trim(),quantity:Number(qty)||1,condition}]});setName('');setQty('1');notify('Utility added')}function buy(){if(!purchase.name.trim()||Number(purchase.cost)<=0)return;const p={id:uid(),...purchase,qty:Number(purchase.qty)||1,cost:Number(purchase.cost)};update({purchases:[p,...purchases],utilities:[...items,{id:uid(),name:p.name,quantity:Number(p.qty),condition:'New'}]});setPurchase({name:'',qty:'1',cost:'',date:today()});notify('Purchase recorded and added to inventory')}return <><Heading eyebrow="CLUB ASSETS" title="Utilities & equipment" desc="Track existing club equipment and record new purchases."/><div className="two-col"><Panel title="Current utilities" desc="Items owned by the club"><div className="inline-add"><input value={name} onChange={e=>setName(e.target.value)} placeholder="Item name"/><input type="number" min="1" value={qty} onChange={e=>setQty(e.target.value)} placeholder="Qty"/><select value={condition} onChange={e=>setCondition(e.target.value)}><option>Good</option><option>Needs repair</option><option>Damaged</option></select><button className="btn primary" onClick={add}><Plus size={15}/> Add</button></div>{items.map(x=><div className="utility-row" key={x.id}><div><b>{x.name}</b><small>{x.condition}</small></div><span>Qty {x.quantity}</span><button className="icon-button danger" onClick={()=>update({utilities:items.filter(i=>i.id!==x.id)})}><Trash2 size={15}/></button></div>)}{!items.length&&<p className="muted">No equipment recorded.</p>}</Panel><Panel title="Buy new utilities" desc="Record purchases and add the item to inventory"><div className="purchase-form"><label>Item name<input value={purchase.name} onChange={e=>setPurchase({...purchase,name:e.target.value})}/></label><label>Quantity<input type="number" min="1" value={purchase.qty} onChange={e=>setPurchase({...purchase,qty:e.target.value})}/></label><label>Total cost (RM)<input type="number" min="0" value={purchase.cost} onChange={e=>setPurchase({...purchase,cost:e.target.value})}/></label><label>Purchase date<input type="date" value={purchase.date} onChange={e=>setPurchase({...purchase,date:e.target.value})}/></label><button className="btn primary" onClick={buy}><Plus size={15}/> Record purchase</button></div></Panel></div><Panel title="Purchase history" desc="Recorded equipment purchases"><div className="table-wrap"><table><thead><tr><th>ITEM</th><th>DATE</th><th>QUANTITY</th><th>COST</th></tr></thead><tbody>{purchases.map(p=><tr key={p.id}><td>{p.name}</td><td>{p.date}</td><td>{p.qty}</td><td>{money(p.cost)}</td></tr>)}</tbody></table>{!purchases.length&&<p className="muted">No purchases recorded.</p>}</div></Panel></>}
+function SettingsPage({data,update,notify}){
+ const [club,setClub]=useState(data.clubName||'Lion Dance Club');
+ const [roles,setRoles]=useState(data.roles||[]);
+ const [name,setName]=useState('');
+ const [rate,setRate]=useState('');
+
+ useEffect(()=>{
+  setClub(data.clubName||'Lion Dance Club');
+  setRoles(data.roles||[]);
+ },[data.clubName,data.roles]);
+
+ function updateRole(id,patch){
+  setRoles(current=>
+   current.map(r=>r.id===id?{...r,...patch}:r)
+  );
+ }
+
+ function addRole(){
+  if(!name.trim()){
+   notify('Please enter a role name.');
+   return;
+  }
+
+  const amount=Number(rate);
+
+  if(!Number.isFinite(amount)||amount<0){
+   notify('Please enter a valid default salary.');
+   return;
+  }
+
+  if(roles.some(r=>
+   r.name.trim().toLowerCase()===name.trim().toLowerCase()
+  )){
+   notify('This role already exists.');
+   return;
+  }
+
+  setRoles(current=>[
+   ...current,
+   {
+    id:uid(),
+    name:name.trim(),
+    rate:amount
+   }
+  ]);
+
+  setName('');
+  setRate('');
+ }
+
+ function removeRole(id){
+  const role=roles.find(r=>r.id===id);
+
+  if(!role)return;
+
+  if(!confirm(
+   `Remove the role "${role.name}" from Settings? Historical order records will remain unchanged.`
+  )){
+   return;
+  }
+
+  setRoles(current=>current.filter(r=>r.id!==id));
+ }
+
+ function saveSettings(){
+  if(!club.trim()){
+   notify('Please enter your club name.');
+   return;
+  }
+
+  if(roles.some(r=>!r.name.trim())){
+   notify('Every role must have a name.');
+   return;
+  }
+
+  update({
+   clubName:club.trim(),
+   roles:roles.map(r=>({
+    ...r,
+    name:r.name.trim(),
+    rate:Number(r.rate||0)
+   }))
+  });
+
+  notify('Settings saved.');
+ }
+
+ return <>
+  <Heading
+   eyebrow="PREFERENCES"
+   title="Settings"
+   desc="Manage your club information and default member salary rates."
+  />
+
+  <div className="settings-card">
+   <div className="panel-head">
+    <div>
+     <h3>Club information</h3>
+     <p>Set the name displayed in your management system.</p>
+    </div>
+   </div>
+
+   <Field label="Club name">
+    <input
+     value={club}
+     onChange={e=>setClub(e.target.value)}
+     placeholder="Enter club name"
+    />
+   </Field>
+  </div>
+
+  <div className="settings-card">
+   <div className="panel-head">
+    <div>
+     <h3>Default member salary rates</h3>
+     <p>
+      These rates are used when assigning a member to an order.
+      You can still adjust an individual member's salary in an order.
+     </p>
+    </div>
+   </div>
+
+   <div className="table-wrap">
+    <table>
+     <thead>
+      <tr>
+       <th>ROLE</th>
+       <th>DEFAULT SALARY (RM)</th>
+       <th>ACTION</th>
+      </tr>
+     </thead>
+
+     <tbody>
+      {roles.map(r=>
+       <tr key={r.id}>
+        <td>
+         <input
+          value={r.name}
+          onChange={e=>updateRole(r.id,{name:e.target.value})}
+         />
+        </td>
+
+        <td>
+         <input
+          type="number"
+          min="0"
+          step="0.01"
+          value={r.rate}
+          onChange={e=>updateRole(r.id,{rate:e.target.value})}
+         />
+        </td>
+
+        <td>
+         <button
+          className="icon-button danger"
+          title="Remove role"
+          onClick={()=>removeRole(r.id)}
+         >
+          <Trash2 size={15}/>
+         </button>
+        </td>
+       </tr>
+      )}
+     </tbody>
+    </table>
+   </div>
+
+   <div className="assignment-add">
+    <input
+     value={name}
+     onChange={e=>setName(e.target.value)}
+     placeholder="New role name"
+    />
+
+    <input
+     type="number"
+     min="0"
+     step="0.01"
+     value={rate}
+     onChange={e=>setRate(e.target.value)}
+     placeholder="Default salary (RM)"
+    />
+
+    <button className="btn outline" onClick={addRole}>
+     <Plus size={15}/> Add role
+    </button>
+   </div>
+
+   <p className="muted">
+    Changing a default rate does not change salaries already recorded in historical orders.
+   </p>
+  </div>
+
+  <div className="settings-card">
+   <div className="panel-head">
+    <div>
+     <h3>Account-based storage</h3>
+     <p>
+      Your club data is stored on the server and associated with your account.
+     </p>
+    </div>
+    <Lock size={20}/>
+   </div>
+
+   <div className="account-note">
+    <Lock size={17}/>
+    <span>
+     <b>Your club records are linked to your account.</b>
+     <small>
+      Sign in with your account to access your club information.
+     </small>
+    </span>
+   </div>
+  </div>
+
+  <div className="modal-actions">
+   <button className="btn primary" onClick={saveSettings}>
+    <Save size={16}/> Save settings
+   </button>
+  </div>
+ </>;
+}
+export default App;

@@ -1,0 +1,6 @@
+node_modules
+dist
+server/club-data.sqlite
+server/club-data.sqlite-shm
+server/club-data.sqlite-wal
+.env
