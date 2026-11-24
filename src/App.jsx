@@ -1,5 +1,5 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
-import {LayoutDashboard,ClipboardList,Users,Wallet,Settings,Calculator,Boxes,Plus,Search,MapPin,CalendarDays,TrendingUp,LogOut,Pencil,Trash2,Download,Check,X,Menu,Save,Drum,Receipt,ArrowUpRight,UserPlus,Lock,Mail,ChevronRight} from 'lucide-react';
+import {LayoutDashboard,ClipboardList,Users,Wallet,Settings,Calculator,Boxes,Plus,Search,MapPin,CalendarDays,TrendingUp,LogOut,Pencil,Trash2,Download,Check,X,Menu,Save,Drum,Receipt,ArrowUpRight,UserPlus,Lock,Mail,ChevronRight,Eye,EyeOff} from 'lucide-react';
 import './styles.css';
 const API='/api';
 const defaults=()=>({
@@ -723,9 +723,9 @@ function App(){
  return <div className="shell">
   <aside className={`sidebar ${mobile?'show':''}`}>
    <div className="brand">
-    <div className="brand-icon"><Drum/></div>
+    <div className="brand-icon"><img src="/lion-sync.svg" alt="LionSync logo"/></div>
     <div>
-     <b>{data.clubName||'Lion Dance Club'}</b>
+     <b>LionSync</b>
      <small>CLUB MANAGEMENT</small>
     </div>
    </div>
@@ -917,10 +917,10 @@ function App(){
       <Download size={30}/>
      </div>
 
-     <h2>Install Lion Dance Club</h2>
+     <h2>Install LionSync</h2>
 
      <p>
-      Add Lion Dance Club to your device for quicker access
+      Add LionSync to your device for quicker access
       and a convenient app-like experience.
      </p>
 
@@ -997,26 +997,50 @@ function App(){
  </div>;
 }
 function Account({user,setUser,api,logout,notify}){
- const [committeeRole,setCommitteeRole]=useState(
-  user.committeeRole||'Member'
- );
+ const [username,setUsername]=useState(user.name||'');
+ const [committeeRole,setCommitteeRole]=useState(user.committeeRole||'Member');
  const [password,setPassword]=useState('');
- const [saving,setSaving]=useState(false);
+ const [savingName,setSavingName]=useState(false);
+ const [savingRole,setSavingRole]=useState(false);
  const [deleting,setDeleting]=useState(false);
 
  const committeeRoles=[
-  'President',
-  'Vice President',
-  'Secretary',
-  'Treasurer',
-  'Committee Member',
-  'Member',
-  'Other'
+  'President','Vice President','Secretary','Treasurer',
+  'Committee Member','Member','Other'
  ];
 
- async function saveRole(){
-  setSaving(true);
+ async function saveUsername(){
+  const cleanUsername=username.trim();
 
+  if(!cleanUsername){
+   notify('Please enter a username');
+   return;
+  }
+
+  if(cleanUsername.length>60){
+   notify('Username must not exceed 60 characters');
+   return;
+  }
+
+  setSavingName(true);
+  try{
+   const result=await api('/auth/account',{
+    method:'PUT',
+    body:JSON.stringify({name:cleanUsername})
+   });
+
+   setUser(result.user||{...user,name:cleanUsername});
+   setUsername(cleanUsername);
+   notify('Username updated successfully');
+  }catch(e){
+   notify(e.message);
+  }finally{
+   setSavingName(false);
+  }
+ }
+
+ async function saveRole(){
+  setSavingRole(true);
   try{
    const result=await api('/auth/account',{
     method:'PUT',
@@ -1028,7 +1052,7 @@ function Account({user,setUser,api,logout,notify}){
   }catch(e){
    notify(e.message);
   }finally{
-   setSaving(false);
+   setSavingRole(false);
   }
  }
 
@@ -1045,7 +1069,6 @@ function Account({user,setUser,api,logout,notify}){
   }
 
   setDeleting(true);
-
   try{
    await api('/auth/account',{
     method:'DELETE',
@@ -1064,16 +1087,35 @@ function Account({user,setUser,api,logout,notify}){
   <Heading
    eyebrow="PERSONAL SETTINGS"
    title="Account"
-   desc="Manage your account information and committee position."
+   desc="Manage your username, account information and committee position."
   />
 
   <div className="two-col">
-   <Panel title="Account information" desc="Your registered account details">
-    <div className="glance">
-     <div>
-      <span>Full name</span>
-      <b>{user.name}</b>
-     </div>
+   <Panel title="Account information" desc="View and update your account details">
+    <div className="purchase-form">
+     <label className="field-group">
+      <span>Username</span>
+      <input
+       className="field"
+       type="text"
+       maxLength="60"
+       value={username}
+       onChange={e=>setUsername(e.target.value)}
+       placeholder="Enter your username"
+      />
+     </label>
+
+     <button
+      className="btn primary"
+      onClick={saveUsername}
+      disabled={savingName}
+     >
+      <Save size={16}/>
+      {savingName?'Saving…':'Save username'}
+     </button>
+    </div>
+
+    <div className="glance account-details">
      <div>
       <span>Email address</span>
       <b>{user.email}</b>
@@ -1103,10 +1145,10 @@ function Account({user,setUser,api,logout,notify}){
      <button
       className="btn primary"
       onClick={saveRole}
-      disabled={saving}
+      disabled={savingRole}
      >
       <Save size={16}/>
-      {saving?'Saving…':'Save position'}
+      {savingRole?'Saving…':'Save position'}
      </button>
     </div>
    </Panel>
@@ -1142,7 +1184,107 @@ function Account({user,setUser,api,logout,notify}){
   </Panel>
  </>;
 }
-function Auth({mode,setMode,form,setForm,submit,error,busy}){return <div className="auth-page"><div className="auth-art"><div className="auth-brand"><div className="brand-icon"><Drum/></div><span>LION DANCE CLUB</span></div><div className="auth-copy"><div className="eyebrow">YOUR CLUB, ORGANIZED</div><h1>Every performance.<br/>Every detail.<br/><em>One place.</em></h1><p>Manage bookings, members, payroll and club finances with records tied to your account.</p></div><div className="auth-foot">Secure account-based club management</div></div><div className="auth-panel"><form className="auth-card" onSubmit={submit}><div className="auth-symbol"><Lock/></div><div className="eyebrow">WELCOME</div><h2>{mode==='login'?'Sign in to your club':'Create your account'}</h2><p>{mode==='login'?'Access your club records from any device.':'Start managing your lion dance club records.'}</p>{mode==='register'&&<label>Full name<input required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="Your name"/></label>}<label>Email address<input required type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="name@example.com"/></label><label>Password<input required minLength="8" type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="At least 8 characters"/></label>{error&&<div className="error-box">{error}</div>}<button className="btn primary full" disabled={busy}>{busy?'Please wait…':mode==='login'?'Sign in':'Create account'}</button><div className="auth-switch">{mode==='login'?"Don't have an account?":"Already have an account?"} <button type="button" onClick={()=>setMode(mode==='login'?'register':'login')}>{mode==='login'?'Register':'Sign in'}</button></div></form></div></div>}
+
+function Auth({mode,setMode,form,setForm,submit,error,busy}){
+ const [showPassword,setShowPassword]=useState(false);
+
+ return <div className="auth-page">
+  <div className="auth-art">
+   <div className="auth-brand">
+    <div className="brand-icon">
+     <img src="/lion-sync.svg" alt="LionSync logo"/>
+    </div>
+    <span>LIONSYNC</span>
+   </div>
+
+   <div className="auth-copy">
+    <div className="eyebrow">YOUR CLUB, ORGANIZED</div>
+    <h1>Every performance.<br/>Every detail.<br/><em>One place.</em></h1>
+    <p>Manage bookings, members, payroll and club finances with records tied to your account.</p>
+   </div>
+
+   <div className="auth-foot">Secure account-based club management</div>
+  </div>
+
+  <div className="auth-panel">
+   <form className="auth-card" onSubmit={submit}>
+    <div className="auth-symbol"><Lock/></div>
+    <div className="eyebrow">WELCOME</div>
+    <h2>{mode==='login'?'Sign in to LionSync':'Create your LionSync account'}</h2>
+    <p>{mode==='login'?'Access your club records from any device.':'Start managing your lion dance club records.'}</p>
+
+    {mode==='register'&&
+     <label>
+      Username
+      <input
+       required
+       maxLength="60"
+       value={form.name}
+       onChange={e=>setForm({...form,name:e.target.value})}
+       placeholder="Choose a username"
+      />
+     </label>
+    }
+
+    <label>
+     Email address
+     <input
+      required
+      type="email"
+      value={form.email}
+      onChange={e=>setForm({...form,email:e.target.value})}
+      placeholder="name@example.com"
+     />
+    </label>
+
+    <label className="auth-password-field">
+     <span>Password</span>
+     <div className="password-input-wrap">
+      <input
+       required
+       minLength="8"
+       type={showPassword?'text':'password'}
+       value={form.password}
+       onChange={e=>setForm({...form,password:e.target.value})}
+       placeholder="At least 8 characters"
+       autoComplete={mode==='login'?'current-password':'new-password'}
+      />
+      <button
+       type="button"
+       className="password-toggle"
+       onClick={()=>setShowPassword(value=>!value)}
+       aria-label={showPassword?'Hide password':'Show password'}
+       title={showPassword?'Hide password':'Show password'}
+      >
+       {showPassword?<EyeOff size={18}/>:<Eye size={18}/>}
+      </button>
+     </div>
+    </label>
+
+    {error&&<div className="error-box">{error}</div>}
+
+    <button className="btn primary full" disabled={busy}>
+     {busy?'Please wait…':mode==='login'?'Sign in':'Create account'}
+    </button>
+
+    <div className="auth-switch">
+     {mode==='login'?"Don't have an account?":"Already have an account?"}
+     {' '}
+     <button
+      type="button"
+      onClick={()=>{
+       setShowPassword(false);
+       setMode(mode==='login'?'register':'login');
+      }}
+     >
+      {mode==='login'?'Register':'Sign in'}
+     </button>
+    </div>
+   </form>
+  </div>
+ </div>;
+}
+
 function Heading({eyebrow,title,desc,action}){return <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{desc}</p></div>{action}</div>}
 function Stat({label,value,sub,icon:Icon,tone=''}){return <div className="stat-card"><div className={'stat-icon '+tone}><Icon size={19}/></div><div className="stat-label">{label}</div><div className="stat-value">{value}</div><div className="stat-sub">{sub}</div></div>}
 function Panel({title,desc,children,action}){return <section className="panel"><div className="panel-head"><div><h3>{title}</h3>{desc&&<p>{desc}</p>}</div>{action}</div>{children}</section>}

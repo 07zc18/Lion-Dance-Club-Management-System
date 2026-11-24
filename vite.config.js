@@ -9,13 +9,13 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
 
-      includeAssets: ['lion-dance.svg', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'],
+      includeAssets: ['lion-sync.svg'],
 
       manifest: {
-        name: 'Lion Dance Club Management',
-        short_name: 'Lion Dance Club',
-        description: 'Manage lion dance club events, members, payments and finances.',
-        theme_color: '#241d1c',
+        name: 'LionSync',
+        short_name: 'LionSync',
+        description: 'LionSync - manage lion dance club events, members, payments and finances.',
+        theme_color: '#4b141b',
         background_color: '#f7f4f0',
         display: 'standalone',
         orientation: 'any',
@@ -23,19 +23,7 @@ export default defineConfig({
         scope: '/',
         icons: [
           {
-            src: '/icon-192.png',
-            sizes: '192x192',
-            type: 'image/png',
-            purpose: 'any'
-          },
-          {
-            src: '/icon-512.png',
-            sizes: '512x512',
-            type: 'image/png',
-            purpose: 'any'
-          },
-          {
-            src: '/lion-dance.svg',
+            src: '/lion-sync.svg',
             sizes: 'any',
             type: 'image/svg+xml',
             purpose: 'any'

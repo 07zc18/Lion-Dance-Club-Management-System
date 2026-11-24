@@ -262,26 +262,49 @@ app.get('/api/auth/me', auth, async (req, res) => {
   }
 });
 
-// Update committee role
+// Update the signed-in user's username and/or committee role.
 app.put('/api/auth/account', auth, async (req, res) => {
   try {
-    const committeeRole = String(
-      req.body?.committeeRole || ''
-    ).trim();
+    const updates = [];
+    const args = [];
 
-    if (!committeeRole || committeeRole.length > 60) {
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'name')) {
+      const name = String(req.body.name || '').trim();
+
+      if (!name || name.length > 60) {
+        return res.status(400).json({
+          error: 'Enter a username with 1 to 60 characters.'
+        });
+      }
+
+      updates.push('name = ?');
+      args.push(name);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'committeeRole')) {
+      const committeeRole = String(req.body.committeeRole || '').trim();
+
+      if (!committeeRole || committeeRole.length > 60) {
+        return res.status(400).json({
+          error: 'Enter a committee role with no more than 60 characters.'
+        });
+      }
+
+      updates.push('committee_role = ?');
+      args.push(committeeRole);
+    }
+
+    if (updates.length === 0) {
       return res.status(400).json({
-        error: 'Enter a committee role with no more than 60 characters.'
+        error: 'No account information was provided.'
       });
     }
 
+    args.push(req.user.id);
+
     const result = await db.execute({
-      sql: `
-        UPDATE users
-        SET committee_role = ?
-        WHERE id = ?
-      `,
-      args: [committeeRole, req.user.id]
+      sql: `UPDATE users SET ${updates.join(', ')} WHERE id = ?`,
+      args
     });
 
     if (!result.rowsAffected) {
@@ -289,12 +312,11 @@ app.put('/api/auth/account', auth, async (req, res) => {
     }
 
     const user = await getUser(req.user.id);
-
     res.json({ ok: true, user });
 
   } catch (e) {
-    console.error('Committee role update error:', e);
-    res.status(500).json({ error: 'Could not update committee role.' });
+    console.error('Account update error:', e);
+    res.status(500).json({ error: 'Could not update account information.' });
   }
 });
 
