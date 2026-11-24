@@ -328,3 +328,170 @@
   min-width:0;
  }
 }
+
+/* Account synchronization indicator */
+.sync-label .sync-dot{
+ flex-shrink:0;
+}
+.sync-synced .sync-dot{
+ background:#5c9c6d;
+}
+.sync-loading .sync-dot{
+ background:#b58a45;
+}
+.sync-offline .sync-dot,
+.sync-offline-pending .sync-dot{
+ background:#c58b4f;
+}
+.sync-conflict .sync-dot{
+ background:#c34c43;
+}
+.sync-conflict{
+ color:#b0443b;
+}
+
+/* Install app button in sidebar */
+.install-app-button{
+ width:calc(100% - 24px);
+ margin:12px;
+ justify-content:flex-start;
+ border:1px solid rgba(201,154,85,.35);
+ background:rgba(201,154,85,.08);
+ color:#c99a55;
+}
+.install-app-button:hover:not(:disabled){
+ background:rgba(201,154,85,.16);
+}
+.install-app-button:disabled{
+ opacity:.7;
+ cursor:default;
+}
+
+/* Installation popup */
+.install-overlay{
+ position:fixed;
+ inset:0;
+ z-index:10000;
+ display:flex;
+ align-items:center;
+ justify-content:center;
+ padding:20px;
+ background:rgba(20,16,15,.68);
+ backdrop-filter:blur(5px);
+}
+
+.install-popup{
+ position:relative;
+ width:100%;
+ max-width:420px;
+ padding:36px 30px 28px;
+ border-radius:20px;
+ background:var(--card,#fff);
+ color:var(--text,#241d1c);
+ text-align:center;
+ box-shadow:0 20px 70px rgba(0,0,0,.28);
+ animation:installPopupIn .25s ease-out;
+}
+
+@keyframes installPopupIn{
+ from{
+  opacity:0;
+  transform:translateY(15px) scale(.97);
+ }
+ to{
+  opacity:1;
+  transform:translateY(0) scale(1);
+ }
+}
+
+.install-close{
+ position:absolute;
+ top:12px;
+ right:15px;
+ width:32px;
+ height:32px;
+ border:0;
+ border-radius:50%;
+ background:transparent;
+ color:inherit;
+ font-size:25px;
+ cursor:pointer;
+}
+
+.install-popup-icon{
+ width:66px;
+ height:66px;
+ margin:0 auto 18px;
+ display:flex;
+ align-items:center;
+ justify-content:center;
+ border-radius:18px;
+ background:rgba(201,154,85,.14);
+ color:#c99a55;
+}
+
+.install-popup h2{
+ margin:0 0 10px;
+ font-size:23px;
+ font-weight:700;
+}
+
+.install-popup p{
+ margin:0 auto 24px;
+ max-width:310px;
+ color:var(--muted,#777);
+ font-size:14px;
+ line-height:1.65;
+}
+
+.install-primary{
+ width:100%;
+ min-height:46px;
+ display:flex;
+ align-items:center;
+ justify-content:center;
+ gap:9px;
+ border:0;
+ border-radius:10px;
+ background:#a9793f;
+ color:#fff;
+ font-size:15px;
+ font-weight:600;
+ cursor:pointer;
+}
+
+.install-primary:hover{
+ background:#906533;
+}
+
+.install-later{
+ width:100%;
+ margin-top:12px;
+ padding:10px;
+ border:0;
+ background:transparent;
+ color:var(--muted,#777);
+ font-size:14px;
+ cursor:pointer;
+}
+
+.install-instructions{
+ margin:18px 0;
+ padding:16px;
+ border-radius:12px;
+ background:rgba(201,154,85,.09);
+ text-align:left;
+ font-size:13px;
+ line-height:1.8;
+}
+
+.install-instructions ol{
+ margin:8px 0 0;
+ padding-left:20px;
+}
+
+@media(max-width:480px){
+ .install-popup{
+  padding:32px 22px 24px;
+ }
+}

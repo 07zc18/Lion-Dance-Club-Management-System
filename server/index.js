@@ -1,62 +1,88 @@
-
 import express from 'express';
 import cors from 'cors';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import Database from 'better-sqlite3';
+import { createClient } from '@libsql/client';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const db = new Database(path.join(__dirname, 'club-data.sqlite'));
 
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+if (!process.env.TURSO_DATABASE_URL || !process.env.TURSO_AUTH_TOKEN) {
+  throw new Error('TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are required.');
+}
 
-// Database tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  );
+const db = createClient({
+  url: process.env.TURSO_DATABASE_URL,
+  authToken: process.env.TURSO_AUTH_TOKEN,
+  intMode: 'number'
+});
 
-  CREATE TABLE IF NOT EXISTS club_data (
-    user_id INTEGER PRIMARY KEY,
-    data TEXT NOT NULL,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
+// Initialize tables without deleting existing records.
+async function initializeDatabase() {
+  await db.batch([
+    `CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      committee_role TEXT NOT NULL DEFAULT 'Member'
+    )`,
 
-  CREATE TABLE IF NOT EXISTS user_security (
-    user_id INTEGER PRIMARY KEY,
-    pin_hash TEXT NOT NULL,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
+    `CREATE TABLE IF NOT EXISTS club_data (
+      user_id INTEGER PRIMARY KEY,
+      data TEXT NOT NULL,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      version INTEGER NOT NULL DEFAULT 1,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    )`,
 
-  CREATE TABLE IF NOT EXISTS payment_unlock_tokens (
-    jti TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL,
-    expires_at TEXT NOT NULL,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-`);
+    `CREATE TABLE IF NOT EXISTS user_security (
+      user_id INTEGER PRIMARY KEY,
+      pin_hash TEXT NOT NULL,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    )`,
 
-// Add committee_role to existing accounts without resetting them.
-const userColumns = db.prepare('PRAGMA table_info(users)').all();
-if (!userColumns.some(column => column.name === 'committee_role')) {
-  db.exec(`
-    ALTER TABLE users
-    ADD COLUMN committee_role TEXT NOT NULL DEFAULT 'Member'
-  `);
+    `CREATE TABLE IF NOT EXISTS payment_unlock_tokens (
+      jti TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      expires_at TEXT NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    )`
+  ], 'write');
+
+  // Preserve compatibility with older database schemas.
+  const clubColumns = await db.execute('PRAGMA table_info(club_data)');
+
+  if (!clubColumns.rows.some(column => column.name === 'version')) {
+    await db.execute(`
+      ALTER TABLE club_data
+      ADD COLUMN version INTEGER NOT NULL DEFAULT 1
+    `);
+  }
+
+  const userColumns = await db.execute('PRAGMA table_info(users)');
+
+  if (!userColumns.rows.some(column => column.name === 'committee_role')) {
+    await db.execute(`
+      ALTER TABLE users
+      ADD COLUMN committee_role TEXT NOT NULL DEFAULT 'Member'
+    `);
+  }
+
+  console.log('Turso database initialized successfully.');
 }
 
 const app = express();
+
 app.use(cors());
 app.use(express.json({ limit: '5mb' }));
+
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+  throw new Error('JWT_SECRET must be set in production.');
+}
 
 const secret =
   process.env.JWT_SECRET || 'change-this-secret-before-deployment';
@@ -86,16 +112,23 @@ function auth(req, res, next) {
   }
 }
 
-function getUser(id) {
-  return db.prepare(`
-    SELECT id, name, email, committee_role AS committeeRole
-    FROM users
-    WHERE id=?
-  `).get(id);
+async function getUser(id) {
+  const result = await db.execute({
+    sql: `
+      SELECT id, name, email, committee_role AS committeeRole
+      FROM users
+      WHERE id = ?
+    `,
+    args: [id]
+  });
+
+  return result.rows[0] || null;
 }
 
 // Account registration
 app.post('/api/auth/register', async (req, res) => {
+  let tx;
+
   try {
     const { name, email, password } = req.body || {};
 
@@ -112,41 +145,60 @@ app.post('/api/auth/register', async (req, res) => {
 
     const hash = await bcrypt.hash(password, 12);
 
-    const info = db.prepare(`
-      INSERT INTO users(name, email, password_hash, committee_role)
-      VALUES(?,?,?,'Member')
-    `).run(
-      name.trim(),
-      email.trim().toLowerCase(),
-      hash
-    );
+    tx = await db.transaction('write');
 
-    const user = getUser(info.lastInsertRowid);
+    const info = await tx.execute({
+      sql: `
+        INSERT INTO users(name, email, password_hash, committee_role)
+        VALUES(?,?,?,'Member')
+      `,
+      args: [
+        name.trim(),
+        email.trim().toLowerCase(),
+        hash
+      ]
+    });
 
-    db.prepare(`
-      INSERT INTO club_data(user_id, data) VALUES(?,?)
-    `).run(
-      user.id,
-      JSON.stringify({
-        clubName: 'Lion Dance Club',
-        roles: [
-          { id: 'head', name: 'Lion Head', rate: 150 },
-          { id: 'tail', name: 'Lion Tail', rate: 150 },
-          { id: 'drum', name: 'Drummer', rate: 120 },
-          { id: 'cymbals', name: 'Cymbals', rate: 100 },
-          { id: 'gong', name: 'Gong', rate: 100 },
-          { id: 'other', name: 'Other', rate: 80 }
-        ],
-        orders: [],
-        performers: [],
-        utilities: [],
-        purchases: []
-      })
-    );
+    const userId = Number(info.lastInsertRowid);
+
+    await tx.execute({
+      sql: `
+        INSERT INTO club_data(user_id, data)
+        VALUES(?,?)
+      `,
+      args: [
+        userId,
+        JSON.stringify({
+          clubName: 'Lion Dance Club',
+          roles: [
+            { id: 'head', name: 'Lion Head', rate: 150 },
+            { id: 'tail', name: 'Lion Tail', rate: 150 },
+            { id: 'drum', name: 'Drummer', rate: 120 },
+            { id: 'cymbals', name: 'Cymbals', rate: 100 },
+            { id: 'gong', name: 'Gong', rate: 100 },
+            { id: 'other', name: 'Other', rate: 80 }
+          ],
+          orders: [],
+          performers: [],
+          utilities: [],
+          purchases: []
+        })
+      ]
+    });
+
+    const user = await getUser(userId);
+
+    await tx.commit();
+    tx = null;
 
     res.json({ token: sign(user), user });
+
   } catch (e) {
-    if (String(e).includes('UNIQUE')) {
+    if (tx) {
+      try { await tx.rollback(); } catch {}
+    }
+
+    if (/UNIQUE constraint failed/i.test(String(e.message || e))) {
       return res.status(409).json({
         error: 'An account with this email already exists.'
       });
@@ -162,9 +214,12 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body || {};
 
-    const row = db.prepare(`
-      SELECT * FROM users WHERE email=?
-    `).get(String(email || '').trim().toLowerCase());
+    const result = await db.execute({
+      sql: 'SELECT * FROM users WHERE email = ?',
+      args: [String(email || '').trim().toLowerCase()]
+    });
+
+    const row = result.rows[0];
 
     if (!row || !(await bcrypt.compare(password || '', row.password_hash))) {
       return res.status(401).json({
@@ -172,9 +227,16 @@ app.post('/api/auth/login', async (req, res) => {
       });
     }
 
-    const user = getUser(row.id);
+    const user = await getUser(row.id);
+
+    if (!user) {
+      return res.status(401).json({
+        error: 'Account no longer exists.'
+      });
+    }
 
     res.json({ token: sign(user), user });
+
   } catch (e) {
     console.error('Login error:', e);
     res.status(500).json({ error: 'Could not log in.' });
@@ -182,47 +244,64 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 // Current account
-app.get('/api/auth/me', auth, (req, res) => {
-  const user = getUser(req.user.id);
+app.get('/api/auth/me', auth, async (req, res) => {
+  try {
+    const user = await getUser(req.user.id);
 
-  if (!user) {
-    return res.status(401).json({ error: 'Account no longer exists.' });
+    if (!user) {
+      return res.status(401).json({
+        error: 'Account no longer exists.'
+      });
+    }
+
+    res.json({ user });
+
+  } catch (e) {
+    console.error('Account verification error:', e);
+    res.status(500).json({ error: 'Could not verify account.' });
   }
-
-  res.json({ user });
 });
 
 // Update committee role
-app.put('/api/auth/account', auth, (req, res) => {
-  const committeeRole = String(
-    req.body?.committeeRole || ''
-  ).trim();
+app.put('/api/auth/account', auth, async (req, res) => {
+  try {
+    const committeeRole = String(
+      req.body?.committeeRole || ''
+    ).trim();
 
-  if (!committeeRole || committeeRole.length > 60) {
-    return res.status(400).json({
-      error: 'Enter a committee role with no more than 60 characters.'
+    if (!committeeRole || committeeRole.length > 60) {
+      return res.status(400).json({
+        error: 'Enter a committee role with no more than 60 characters.'
+      });
+    }
+
+    const result = await db.execute({
+      sql: `
+        UPDATE users
+        SET committee_role = ?
+        WHERE id = ?
+      `,
+      args: [committeeRole, req.user.id]
     });
+
+    if (!result.rowsAffected) {
+      return res.status(404).json({ error: 'Account not found.' });
+    }
+
+    const user = await getUser(req.user.id);
+
+    res.json({ ok: true, user });
+
+  } catch (e) {
+    console.error('Committee role update error:', e);
+    res.status(500).json({ error: 'Could not update committee role.' });
   }
-
-  const result = db.prepare(`
-    UPDATE users
-    SET committee_role=?
-    WHERE id=?
-  `).run(committeeRole, req.user.id);
-
-  if (!result.changes) {
-    return res.status(404).json({ error: 'Account not found.' });
-  }
-
-  res.json({
-    ok: true,
-    user: getUser(req.user.id)
-  });
 });
 
 // Delete the signed-in account.
-// Password confirmation is required to prevent accidental deletion.
 app.delete('/api/auth/account', auth, async (req, res) => {
+  let tx;
+
   try {
     const password = req.body?.password;
 
@@ -232,9 +311,12 @@ app.delete('/api/auth/account', auth, async (req, res) => {
       });
     }
 
-    const row = db.prepare(`
-      SELECT password_hash FROM users WHERE id=?
-    `).get(req.user.id);
+    const result = await db.execute({
+      sql: 'SELECT password_hash FROM users WHERE id = ?',
+      args: [req.user.id]
+    });
+
+    const row = result.rows[0];
 
     if (!row) {
       return res.status(404).json({ error: 'Account not found.' });
@@ -248,79 +330,223 @@ app.delete('/api/auth/account', auth, async (req, res) => {
       });
     }
 
-    const deleteAccount = db.transaction(() => {
-      db.prepare('DELETE FROM payment_unlock_tokens WHERE user_id=?')
-        .run(req.user.id);
+    tx = await db.transaction('write');
 
-      db.prepare('DELETE FROM user_security WHERE user_id=?')
-        .run(req.user.id);
-
-      db.prepare('DELETE FROM club_data WHERE user_id=?')
-        .run(req.user.id);
-
-      db.prepare('DELETE FROM users WHERE id=?')
-        .run(req.user.id);
+    await tx.execute({
+      sql: 'DELETE FROM payment_unlock_tokens WHERE user_id = ?',
+      args: [req.user.id]
     });
 
-    deleteAccount();
+    await tx.execute({
+      sql: 'DELETE FROM user_security WHERE user_id = ?',
+      args: [req.user.id]
+    });
 
-    res.json({ ok: true, message: 'Account deleted successfully.' });
+    await tx.execute({
+      sql: 'DELETE FROM club_data WHERE user_id = ?',
+      args: [req.user.id]
+    });
+
+    await tx.execute({
+      sql: 'DELETE FROM users WHERE id = ?',
+      args: [req.user.id]
+    });
+
+    await tx.commit();
+    tx = null;
+
+    res.json({
+      ok: true,
+      message: 'Account deleted successfully.'
+    });
+
   } catch (e) {
+    if (tx) {
+      try { await tx.rollback(); } catch {}
+    }
+
     console.error('Account deletion error:', e);
     res.status(500).json({ error: 'Could not delete account.' });
   }
 });
 
-// Read account data
-app.get('/api/data', auth, (req, res) => {
-  const row = db.prepare(`
-    SELECT data FROM club_data WHERE user_id=?
-  `).get(req.user.id);
+// Read account data and its current version.
+app.get('/api/data', auth, async (req, res) => {
+  try {
+    const result = await db.execute({
+      sql: `
+        SELECT data, version
+        FROM club_data
+        WHERE user_id = ?
+      `,
+      args: [req.user.id]
+    });
 
-  res.json(row ? JSON.parse(row.data) : {});
+    const row = result.rows[0];
+
+    res.json({
+      data: row ? JSON.parse(row.data) : {},
+      version: row ? row.version : 0
+    });
+
+  } catch (e) {
+    console.error('Read account data error:', e);
+    res.status(500).json({ error: 'Could not load account data.' });
+  }
 });
 
-// Save account data.
-// Paid records can now be edited without a PIN.
-app.put('/api/data', auth, (req, res) => {
-  const data = req.body;
+// Save account data only when the device has the latest version.
+app.put('/api/data', auth, async (req, res) => {
+  const { data, expectedVersion } = req.body || {};
 
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     return res.status(400).json({ error: 'Invalid data.' });
   }
 
-  try {
-    db.prepare(`
-      INSERT INTO club_data(user_id, data, updated_at)
-      VALUES(?,?,CURRENT_TIMESTAMP)
-      ON CONFLICT(user_id)
-      DO UPDATE SET
-        data=excluded.data,
-        updated_at=CURRENT_TIMESTAMP
-    `).run(req.user.id, JSON.stringify(data));
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 0) {
+    return res.status(400).json({
+      error: 'A valid expectedVersion is required.'
+    });
+  }
 
-    res.json({ ok: true });
+  let tx;
+
+  try {
+    tx = await db.transaction('write');
+
+    const result = await tx.execute({
+      sql: `
+        SELECT version
+        FROM club_data
+        WHERE user_id = ?
+      `,
+      args: [req.user.id]
+    });
+
+    const current = result.rows[0];
+    const currentVersion = current ? current.version : 0;
+
+    if (currentVersion !== expectedVersion) {
+      await tx.rollback();
+      tx = null;
+
+      return res.status(409).json({
+        error: 'This account was updated on another device. Your local changes have not been saved.',
+        conflict: true,
+        currentVersion
+      });
+    }
+
+    let newVersion;
+
+    if (!current) {
+      await tx.execute({
+        sql: `
+          INSERT INTO club_data(user_id, data, version, updated_at)
+          VALUES(?,?,1,CURRENT_TIMESTAMP)
+        `,
+        args: [req.user.id, JSON.stringify(data)]
+      });
+
+      newVersion = 1;
+
+    } else {
+      const update = await tx.execute({
+        sql: `
+          UPDATE club_data
+          SET data = ?,
+              version = version + 1,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE user_id = ? AND version = ?
+        `,
+        args: [
+          JSON.stringify(data),
+          req.user.id,
+          expectedVersion
+        ]
+      });
+
+      if (!update.rowsAffected) {
+        const latest = await tx.execute({
+          sql: `
+            SELECT version
+            FROM club_data
+            WHERE user_id = ?
+          `,
+          args: [req.user.id]
+        });
+
+        const latestVersion = latest.rows[0]?.version ?? 0;
+
+        await tx.rollback();
+        tx = null;
+
+        return res.status(409).json({
+          error: 'This account was updated on another device. Your local changes have not been saved.',
+          conflict: true,
+          currentVersion: latestVersion
+        });
+      }
+
+      newVersion = expectedVersion + 1;
+    }
+
+    await tx.commit();
+    tx = null;
+
+    res.json({ ok: true, version: newVersion });
+
   } catch (e) {
+    if (tx) {
+      try { await tx.rollback(); } catch {}
+    }
+
     console.error('Save account data error:', e);
     res.status(500).json({ error: 'Could not save account data.' });
   }
 });
 
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok' });
+// Health check, including the cloud database connection.
+app.get('/api/health', async (req, res) => {
+  try {
+    await db.execute('SELECT 1 AS connected');
+
+    res.json({
+      status: 'ok',
+      database: 'connected'
+    });
+
+  } catch (e) {
+    console.error('Health check error:', e);
+
+    res.status(503).json({
+      status: 'error',
+      database: 'unavailable'
+    });
+  }
 });
 
 // Serve frontend
 const dist = path.join(__dirname, '../dist');
+
 app.use(express.static(dist));
 
 app.get('*', (req, res) => {
   res.sendFile(path.join(dist, 'index.html'));
 });
 
+// Start only after the cloud database is initialized.
 const port = process.env.PORT || 5000;
 
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Lion Dance Club server running on ${port}`);
-});
+try {
+  await initializeDatabase();
+
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`Lion Dance Club server running on port ${port}`);
+  });
+
+} catch (e) {
+  console.error('Could not start application:', e);
+  await db.close();
+  process.exit(1);
+}

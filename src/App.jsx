@@ -1,4 +1,4 @@
-import React,{useEffect,useMemo,useState} from 'react';
+import React,{useEffect,useMemo,useRef,useState} from 'react';
 import {LayoutDashboard,ClipboardList,Users,Wallet,Settings,Calculator,Boxes,Plus,Search,MapPin,CalendarDays,TrendingUp,LogOut,Pencil,Trash2,Download,Check,X,Menu,Save,Drum,Receipt,ArrowUpRight,UserPlus,Lock,Mail,ChevronRight} from 'lucide-react';
 import './styles.css';
 const API='/api';
@@ -97,6 +97,83 @@ function migrateData(raw){
  return data;
 }
 const csvDownload=(name,rows)=>{const body=rows.map(r=>r.map(v=>'"'+String(v??'').replaceAll('"','""')+'"').join(',')).join('\n');const a=document.createElement('a');const u=URL.createObjectURL(new Blob(['\ufeff'+body],{type:'text/csv;charset=utf-8'}));a.href=u;a.download=name;a.click();URL.revokeObjectURL(u)};
+
+// Account-specific offline storage using IndexedDB.
+const OFFLINE_DB_NAME = 'lion-dance-club-offline';
+
+function openOfflineDB(){
+ return new Promise((resolve,reject)=>{
+  const request=indexedDB.open(OFFLINE_DB_NAME,1);
+
+  request.onupgradeneeded=()=>{
+   const db=request.result;
+   if(!db.objectStoreNames.contains('accounts')){
+    db.createObjectStore('accounts',{keyPath:'userId'});
+   }
+  };
+
+  request.onsuccess=()=>resolve(request.result);
+  request.onerror=()=>reject(request.error);
+ });
+}
+
+async function readOfflineAccount(userId){
+ const db=await openOfflineDB();
+
+ return new Promise((resolve,reject)=>{
+  const tx=db.transaction('accounts','readonly');
+  const request=tx.objectStore('accounts').get(String(userId));
+
+  request.onsuccess=()=>resolve(request.result||null);
+  request.onerror=()=>reject(request.error);
+  tx.oncomplete=()=>db.close();
+ });
+}
+
+async function saveOfflineAccount(userId,user,data,pending,version=0){
+ const db=await openOfflineDB();
+
+ return new Promise((resolve,reject)=>{
+  const tx=db.transaction('accounts','readwrite');
+
+  tx.objectStore('accounts').put({
+   userId:String(userId),
+   user,
+   data,
+   pending:Boolean(pending),
+   version:Number(version||0),
+   updatedAt:Date.now()
+  });
+
+  tx.oncomplete=()=>{
+   db.close();
+   resolve();
+  };
+
+  tx.onerror=()=>{
+   db.close();
+   reject(tx.error);
+  };
+
+  tx.onabort=()=>{
+   db.close();
+   reject(tx.error);
+  };
+ });
+}
+
+function getTokenPayload(token){
+ try{
+  const part=token.split('.')[1];
+  const base64=part.replace(/-/g,'+').replace(/_/g,'/');
+  const binary=atob(base64.padEnd(Math.ceil(base64.length/4)*4,'='));
+  const bytes=Uint8Array.from(binary,c=>c.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes));
+ }catch{
+  return null;
+ }
+}
+
 function App(){
  const [token,setToken]=useState(localStorage.getItem('ld_token')||'');
  const [user,setUser]=useState(null);
@@ -107,11 +184,24 @@ function App(){
 
  const [data,setData]=useState(defaults());
  const [loaded,setLoaded]=useState(false);
+ const [dataVersion,setDataVersion]=useState(0);
+ const [dataDirty,setDataDirty]=useState(false);
+ const [syncStatus,setSyncStatus]=useState('loading');
+ const latestDataRef=useRef(data);
+ const syncInFlightRef=useRef(false);
+ latestDataRef.current=data;
  const [page,setPage]=useState('overview');
  const [modal,setModal]=useState(null);
  const [query,setQuery]=useState('');
  const [toast,setToast]=useState('');
  const [mobile,setMobile]=useState(false);
+ const [deferredPrompt,setDeferredPrompt]=useState(null);
+ const [isInstalled,setIsInstalled]=useState(
+  window.matchMedia('(display-mode: standalone)').matches ||
+  window.navigator.standalone === true
+ );
+ const [showInstallPopup,setShowInstallPopup]=useState(false);
+ const [showInstallHelp,setShowInstallHelp]=useState(false);
 
  const api=async(path,options={})=>{
   const r=await fetch(API+path,{
@@ -125,36 +215,192 @@ function App(){
 
   const j=await r.json().catch(()=>({}));
 
-  if(!r.ok)throw new Error(j.error||'Request failed');
+  if(!r.ok){
+   const error=new Error(j.error||'Request failed');
+   error.status=r.status;
+   error.payload=j;
+   throw error;
+  }
 
   return j;
  };
 
  useEffect(()=>{
+  const handleInstallPrompt=event=>{
+   event.preventDefault();
+   setDeferredPrompt(event);
+  };
+
+  const handleInstalled=()=>{
+   setIsInstalled(true);
+   setDeferredPrompt(null);
+  };
+
+  window.addEventListener('beforeinstallprompt',handleInstallPrompt);
+  window.addEventListener('appinstalled',handleInstalled);
+
+  return()=>{
+   window.removeEventListener('beforeinstallprompt',handleInstallPrompt);
+   window.removeEventListener('appinstalled',handleInstalled);
+  };
+ },[]);
+
+ useEffect(()=>{
+  if(isInstalled)return;
+
+  const dismissedUntil=Number(
+   localStorage.getItem('ld_install_prompt_dismissed_until')||0
+  );
+
+  if(dismissedUntil>Date.now())return;
+
+  const timer=setTimeout(()=>{
+   setShowInstallPopup(true);
+  },3000);
+
+  return()=>clearTimeout(timer);
+ },[isInstalled]);
+
+ const installApp=async()=>{
+  if(isInstalled)return;
+
+  if(deferredPrompt){
+   try{
+    await deferredPrompt.prompt();
+    const choice=await deferredPrompt.userChoice;
+
+    if(choice.outcome==='accepted'){
+     setIsInstalled(true);
+    }
+
+    setDeferredPrompt(null);
+    setShowInstallPopup(false);
+   }catch(error){
+    console.error('Installation error:',error);
+   }
+
+   return;
+  }
+
+  setShowInstallHelp(true);
+ };
+ useEffect(()=>{
   if(!token){
    setLoaded(true);
+   setDataDirty(false);
+   setSyncStatus('synced');
    return;
   }
 
   let live=true;
 
   (async()=>{
+   const payload=getTokenPayload(token);
+   const accountId=payload?.id;
+
    try{
-    const [me,d]=await Promise.all([
+    const cached=accountId ? await readOfflineAccount(accountId) : null;
+
+    const [me,remote]=await Promise.all([
      api('/auth/me'),
      api('/data')
     ]);
 
-    if(live){
+    if(!live)return;
+
+    if(cached?.pending){
+     try{
+      const localData=migrateData(cached.data);
+
+      const saved=await api('/data',{
+       method:'PUT',
+       body:JSON.stringify({
+        data:localData,
+        expectedVersion:Number(cached.version||0)
+       })
+      });
+
+      if(!live)return;
+
+      setUser(me.user);
+      setData(localData);
+      setDataVersion(saved.version);
+      setDataDirty(false);
+      setSyncStatus('synced');
+
+      await saveOfflineAccount(
+       me.user.id,me.user,localData,false,saved.version
+      );
+
+      notify('Your offline changes have been synchronized.');
+     }catch(error){
+      if(!live)return;
+
+      if(error.status===409){
+       const localData=migrateData(cached.data);
+
+       setUser(me.user);
+       setData(localData);
+       setDataVersion(Number(cached.version||0));
+       setDataDirty(false);
+       setSyncStatus('conflict');
+
+       notify('Sync conflict: your offline changes are preserved locally.');
+      }else{
+       throw error;
+      }
+     }
+    }else{
+     const remoteData=migrateData(remote.data);
+
      setUser(me.user);
-     setData(migrateData(d));
-     setLoaded(true);
+     setData(remoteData);
+     setDataVersion(Number(remote.version||0));
+     setDataDirty(false);
+     setSyncStatus('synced');
+
+     await saveOfflineAccount(
+      me.user.id,me.user,remoteData,false,Number(remote.version||0)
+     );
     }
-   }catch{
-    localStorage.removeItem('ld_token');
-    setToken('');
-    setUser(null);
+
+    if(live)setLoaded(true);
+   }catch(error){
+    if(!live)return;
+
+    if(error.status===401){
+     localStorage.removeItem('ld_token');
+     setToken('');
+     setUser(null);
+     setLoaded(true);
+     setSyncStatus('synced');
+     notify('Please log in again.');
+     return;
+    }
+
+    if(accountId){
+     try{
+      const cached=await readOfflineAccount(accountId);
+
+      if(cached){
+       setUser(cached.user);
+       setData(migrateData(cached.data));
+       setDataVersion(Number(cached.version||0));
+       setDataDirty(false);
+       setSyncStatus(cached.pending?'offline-pending':'offline');
+       setLoaded(true);
+
+       notify('Offline mode: using saved account data.');
+       return;
+      }
+     }catch(storageError){
+      console.error('Offline storage error:',storageError);
+     }
+    }
+
     setLoaded(true);
+    setSyncStatus('offline');
+    notify('Unable to connect. Connect to the internet to load this account.');
    }
   })();
 
@@ -162,21 +408,89 @@ function App(){
  },[token]);
 
  useEffect(()=>{
-  if(!token||!loaded||!user)return;
+  if(!token||!loaded||!user||!dataDirty)return;
 
   const t=setTimeout(async()=>{
+   const snapshot=JSON.stringify(data);
+
    try{
-    await api('/data',{
-     method:'PUT',
-     body:JSON.stringify(data)
-    });
-   }catch(e){
-    notify(e.message);
+    await saveOfflineAccount(
+     user.id,user,data,true,dataVersion
+    );
+
+    if(!navigator.onLine){
+     setSyncStatus('offline-pending');
+     setDataDirty(false);
+     return;
+    }
+
+    if(syncInFlightRef.current)return;
+
+    syncInFlightRef.current=true;
+
+    try{
+     const saved=await api('/data',{
+      method:'PUT',
+      body:JSON.stringify({
+       data,
+       expectedVersion:dataVersion
+      })
+     });
+
+     setDataVersion(saved.version);
+
+     await saveOfflineAccount(
+      user.id,user,data,false,saved.version
+     );
+
+     const latestSnapshot=JSON.stringify(latestDataRef.current);
+
+     if(latestSnapshot!==snapshot){
+      await saveOfflineAccount(
+       user.id,user,latestDataRef.current,true,saved.version
+      );
+      setDataDirty(true);
+     }else{
+      setDataDirty(false);
+     }
+
+     setSyncStatus('synced');
+    }catch(error){
+     if(error.status===409){
+      setSyncStatus('conflict');
+      setDataDirty(false);
+      notify('Sync conflict: local changes are preserved. Do not clear this browser data.');
+     }else{
+      setSyncStatus('offline-pending');
+      setDataDirty(false);
+      notify('Changes saved locally. Waiting for an internet connection.');
+     }
+    }finally{
+     syncInFlightRef.current=false;
+    }
+   }catch(error){
+    console.error('Offline save error:',error);
+    setSyncStatus('offline-pending');
+    setDataDirty(false);
+    notify('Could not save offline data. Please check browser storage.');
    }
-  },500);
+  },700);
 
   return()=>clearTimeout(t);
- },[data,token,loaded,user]);
+ },[data,dataDirty,token,loaded,user,dataVersion]);
+
+ useEffect(()=>{
+  const handleOnline=()=>{
+   if(syncStatus==='offline-pending'){
+    setDataDirty(true);
+   }else if(syncStatus==='offline'){
+    setSyncStatus('synced');
+   }
+  };
+
+  window.addEventListener('online',handleOnline);
+  return()=>window.removeEventListener('online',handleOnline);
+ },[syncStatus]);
 
  useEffect(()=>{
   if(!toast)return;
@@ -217,11 +531,17 @@ function App(){
   setToken('');
   setUser(null);
   setData(defaults());
+  setDataDirty(false);
+  setDataVersion(0);
+  setSyncStatus('synced');
   setLoaded(true);
   setPage('overview');
  }
 
- const update=patch=>setData(d=>({...d,...patch}));
+ const update=patch=>{
+  setData(d=>({...d,...patch}));
+  setDataDirty(true);
+ };
 
  const orders=data.orders||[];
  const performers=data.performers||[];
@@ -469,9 +789,13 @@ function App(){
      )}
     </div>
 
-    <div className="sync-label">
+    <div className={`sync-label sync-${syncStatus}`}>
      <span className="sync-dot"/>
-     Account cloud data
+     {syncStatus==='loading'&&'Loading account data…'}
+     {syncStatus==='synced'&&'All changes synced'}
+     {syncStatus==='offline'&&'Offline · Saved account data'}
+     {syncStatus==='offline-pending'&&'Offline · Changes saved locally'}
+     {syncStatus==='conflict'&&'Sync conflict · Local changes preserved'}
     </div>
    </header>
 
@@ -568,6 +892,101 @@ function App(){
     onClose={()=>setModal(null)}
     onEdit={()=>setModal({type:'order',order:modal.order})}
    />
+  }
+
+  {showInstallPopup&&!isInstalled&&
+   <div className="install-overlay">
+    <div className="install-popup">
+     <button
+      type="button"
+      className="install-close"
+      onClick={()=>{
+       setShowInstallPopup(false);
+       setShowInstallHelp(false);
+       localStorage.setItem(
+        'ld_install_prompt_dismissed_until',
+        String(Date.now()+7*24*60*60*1000)
+       );
+      }}
+      aria-label="Close installation popup"
+     >
+      ×
+     </button>
+
+     <div className="install-popup-icon">
+      <Download size={30}/>
+     </div>
+
+     <h2>Install Lion Dance Club</h2>
+
+     <p>
+      Add Lion Dance Club to your device for quicker access
+      and a convenient app-like experience.
+     </p>
+
+     {deferredPrompt ? (
+      <button
+       type="button"
+       className="install-primary"
+       onClick={installApp}
+      >
+       <Download size={17}/>
+       Install Now
+      </button>
+     ) : (
+      <>
+       {showInstallHelp ? (
+        <div className="install-instructions">
+         {/iphone|ipad|ipod/i.test(navigator.userAgent) ||
+          (navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1) ? (
+          <>
+           <b>Install on iPhone or iPad</b>
+           <ol>
+            <li>Open this website in Safari.</li>
+            <li>Tap the Share button.</li>
+            <li>Select Add to Home Screen.</li>
+            <li>Tap Add.</li>
+           </ol>
+          </>
+         ) : (
+          <>
+           <b>Install on your device</b>
+           <ol>
+            <li>Open your browser menu.</li>
+            <li>Select Install app or Add to Home screen.</li>
+            <li>Follow the installation instructions.</li>
+           </ol>
+          </>
+         )}
+        </div>
+       ) : (
+        <button
+         type="button"
+         className="install-primary"
+         onClick={()=>setShowInstallHelp(true)}
+        >
+         How to Install
+        </button>
+       )}
+      </>
+     )}
+
+     <button
+      type="button"
+      className="install-later"
+      onClick={()=>{
+       setShowInstallPopup(false);
+       setShowInstallHelp(false);
+       localStorage.setItem(
+        'ld_install_prompt_dismissed_until',
+        String(Date.now()+7*24*60*60*1000)
+       );
+      }}
+     >
+      Maybe Later
+     </button>
+    </div>
+   </div>
   }
 
   {toast&&
