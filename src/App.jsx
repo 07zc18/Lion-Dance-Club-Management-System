@@ -1,4 +1,5 @@
 import React,{useEffect,useMemo,useRef,useState} from 'react';
+import * as XLSX from 'xlsx';
 import {LayoutDashboard,ClipboardList,Users,Wallet,Settings,Calculator,Boxes,Plus,Search,MapPin,CalendarDays,TrendingUp,LogOut,Pencil,Trash2,Download,Check,X,Menu,Save,Drum,Receipt,ArrowUpRight,UserPlus,Lock,Mail,ChevronRight,Eye,EyeOff} from 'lucide-react';
 import './styles.css';
 const API='/api';
@@ -643,13 +644,13 @@ function App(){
   }
  };
 
- const exportOrders=()=>csvDownload(
-  'lion-dance-events.csv',
-  [
+ const exportOrders=()=>{
+  const rows=[
    [
     'Event ID',
     'Event',
     'Date',
+    'Time',
     'Status',
     'Location',
     'Deposit',
@@ -669,8 +670,16 @@ function App(){
      (s,p)=>s+Number(p.salary||0),0
     );
 
-    const commission=assignments.reduce(
-     (s,p)=>s+Number(p.commission||0),0
+    const commissionRecords=Array.isArray(o.commissionAssignments)
+     ?o.commissionAssignments
+     :assignments;
+
+    const commission=commissionRecords.reduce(
+     (total,c)=>total+Number(
+      c.commission??(
+       Number(o.price||0)*Number(c.commissionRate||0)/100
+      )
+     ),0
     );
 
     const claims=assignments.reduce(
@@ -689,12 +698,23 @@ function App(){
     const extraIncome=Number(o.extra||0);
     const eventIncome=totalAmount+extraIncome;
 
+    const dateText=String(o.date||'');
+    const dateMatch=dateText.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const excelDate=dateMatch
+     ?new Date(
+       Number(dateMatch[1]),
+       Number(dateMatch[2])-1,
+       Number(dateMatch[3])
+      )
+     :'';
+
     return [
-     o.orderNo,
-     o.event,
-     o.date,
-     o.status,
-     o.location,
+     o.orderNo||'',
+     o.event||'',
+     excelDate,
+     o.time||'',
+     o.status||'',
+     o.location||'',
      deposit,
      balance,
      totalAmount,
@@ -706,8 +726,57 @@ function App(){
      eventIncome-memberSalary-commission-claims-legacy
     ];
    })
-  ]
- );
+  ];
+
+  const worksheet=XLSX.utils.aoa_to_sheet(rows);
+
+  worksheet['!cols']=[
+   {wch:16},
+   {wch:28},
+   {wch:14},
+   {wch:12},
+   {wch:14},
+   {wch:24},
+   {wch:15},
+   {wch:15},
+   {wch:16},
+   {wch:15},
+   {wch:17},
+   {wch:20},
+   {wch:23},
+   {wch:18},
+   {wch:16}
+  ];
+
+  // Format event dates and financial amounts.
+  for(let row=1;row<rows.length;row++){
+   const dateCell=worksheet[XLSX.utils.encode_cell({r:row,c:2})];
+
+   if(dateCell&&dateCell.v instanceof Date){
+    dateCell.z='dd/mm/yyyy';
+   }
+
+   for(const col of [6,7,8,9,10,11,12,13,14]){
+    const cell=worksheet[XLSX.utils.encode_cell({r:row,c:col})];
+
+    if(cell&&typeof cell.v==='number'){
+     cell.z='"RM" #,##0.00';
+    }
+   }
+  }
+
+  worksheet['!autofilter']={
+   ref:XLSX.utils.encode_range({
+    s:{r:0,c:0},
+    e:{r:Math.max(rows.length-1,0),c:14}
+   })
+  };
+
+  const workbook=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook,worksheet,'Events');
+
+  XLSX.writeFile(workbook,'lion-dance-events.xlsx');
+ };
 
  const addPerson=name=>{
   if(!name?.trim())return null;
