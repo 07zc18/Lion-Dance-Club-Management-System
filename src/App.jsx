@@ -586,6 +586,12 @@ function App(){
   ),0
  );
 
+ const memberAdditionalPay=orders.reduce(
+  (s,o)=>s+(o.assignments||[]).reduce(
+   (a,p)=>a+Number(p.additionalPay||0),0
+  ),0
+ );
+
  const legacyCommission=orders.reduce(
   (s,o)=>s+(o.commissionMode==='members'?0:Number(o.commission||0)),
   0
@@ -597,6 +603,7 @@ function App(){
   salary-
   memberCommission-
   memberClaims-
+  memberAdditionalPay-
   legacyCommission;
 
  const nav=[
@@ -660,6 +667,7 @@ function App(){
     'Member salary',
     'Member commission',
     'Member additional pay',
+    'Member claims',
     'Legacy commission',
     'Net'
    ],
@@ -680,6 +688,10 @@ function App(){
        Number(o.price||0)*Number(c.commissionRate||0)/100
       )
      ),0
+    );
+
+    const additionalPay=assignments.reduce(
+     (s,p)=>s+Number(p.additionalPay||0),0
     );
 
     const claims=assignments.reduce(
@@ -721,9 +733,10 @@ function App(){
      extraIncome,
      memberSalary,
      commission,
+     additionalPay,
      claims,
      legacy,
-     eventIncome-memberSalary-commission-claims-legacy
+     eventIncome-memberSalary-commission-additionalPay-claims-legacy
     ];
    })
   ];
@@ -745,6 +758,7 @@ function App(){
    {wch:20},
    {wch:23},
    {wch:18},
+   {wch:18},
    {wch:16}
   ];
 
@@ -756,7 +770,7 @@ function App(){
     dateCell.z='dd/mm/yyyy';
    }
 
-   for(const col of [6,7,8,9,10,11,12,13,14]){
+   for(const col of [6,7,8,9,10,11,12,13,14,15]){
     const cell=worksheet[XLSX.utils.encode_cell({r:row,c:col})];
 
     if(cell&&typeof cell.v==='number'){
@@ -768,7 +782,7 @@ function App(){
   worksheet['!autofilter']={
    ref:XLSX.utils.encode_range({
     s:{r:0,c:0},
-    e:{r:Math.max(rows.length-1,0),c:14}
+    e:{r:Math.max(rows.length-1,0),c:15}
    })
   };
 
@@ -1643,6 +1657,11 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
   0
  );
 
+ const totalAdditionalPay=(f.assignments||[]).reduce(
+  (sum,a)=>sum+Number(a.additionalPay||0),
+  0
+ );
+
  function addMember(){
   let person=performers.find(p=>p.id===selected);
 
@@ -1672,6 +1691,9 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
     salary:customSalary===''?Number(selectedRole?.rate||0):Number(customSalary),
     commissionRate:0,
     commission:0,
+    additionalPay:0,
+    additionalPayType:'',
+    additionalPayOther:'',
     claims:[],
     paid:false
    }
@@ -1851,9 +1873,32 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
    return;
   }
 
+  for(const a of f.assignments){
+   const additionalPay=Number(a.additionalPay||0);
+
+   if(!Number.isFinite(additionalPay)||additionalPay<0){
+    alert(`Please enter a valid additional pay amount for ${a.name||'this member'}.`);
+    return;
+   }
+
+   if(additionalPay>0&&!a.additionalPayType){
+    alert(`Please select what the additional pay is for ${a.name||'this member'}.`);
+    return;
+   }
+
+   if(additionalPay>0&&a.additionalPayType==='Others'&&
+    !String(a.additionalPayOther||'').trim()){
+    alert(`Please enter the custom payment purpose for ${a.name||'this member'}.`);
+    return;
+   }
+  }
+
   const assignments=f.assignments.map(a=>({
    ...a,
    salary:Number(a.salary||0),
+   additionalPay:Number(a.additionalPay||0),
+   additionalPayType:a.additionalPayType||'',
+   additionalPayOther:String(a.additionalPayOther||'').trim(),
    claims:a.claims||[]
   }));
 
@@ -2083,6 +2128,43 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
         />
        </label>
 
+       <div className="span-2 form-grid">
+        <Field label="Additional pay (RM)">
+         <input
+          type="number"
+          min="0"
+          step="0.01"
+          value={a.additionalPay??''}
+          onChange={e=>updateAssignment(i,{additionalPay:e.target.value})}
+          placeholder="0.00"
+         />
+        </Field>
+
+        <Field label="Pay for">
+         <select
+          value={a.additionalPayType||''}
+          onChange={e=>updateAssignment(i,{additionalPayType:e.target.value})}
+         >
+          <option value="">Select purpose</option>
+          <option value="Laundry">Laundry</option>
+          <option value="Food">Food</option>
+          <option value="Toll">Toll</option>
+          <option value="Parking">Parking</option>
+          <option value="Others">Others</option>
+         </select>
+        </Field>
+
+        {a.additionalPayType==='Others'&&
+         <Field label="Custom purpose">
+          <input
+           value={a.additionalPayOther||''}
+           onChange={e=>updateAssignment(i,{additionalPayOther:e.target.value})}
+           placeholder="Enter payment purpose"
+          />
+         </Field>
+        }
+       </div>
+
        <span className={'status '+(a.paid?'good':'pending')}>
         {a.paid?'Paid':'Unpaid'}
        </span>
@@ -2174,6 +2256,11 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
      <div className="sub-total">
       <span>Total member salary</span>
       <b>{money(totalSalary)}</b>
+     </div>
+
+     <div className="sub-total">
+      <span>Total additional pay</span>
+      <b>{money(totalAdditionalPay)}</b>
      </div>
 
      <div className="sub-total">
@@ -2392,11 +2479,16 @@ function EventDetails({order:o,roles,onClose,onEdit}){
   (s,c)=>s+Number(c.amount||0),0
  );
 
+ const totalAdditionalPay=assignments.reduce(
+  (sum,a)=>sum+Number(a.additionalPay||0),0
+ );
+
  const legacyCommission=o.commissionMode==='members'
   ?0:Number(o.commission||0);
 
  const eventIncome=Number(o.price||0)+Number(o.extra||0);
- const totalMemberPayable=salary+commissionTotal+totalClaims;
+ const totalMemberPayable=
+  salary+commissionTotal+totalAdditionalPay+totalClaims;
  const net=eventIncome-totalMemberPayable-legacyCommission;
 
  const unpaidAssignments=assignments.filter(a=>!a.paid);
@@ -2419,7 +2511,8 @@ function EventDetails({order:o,roles,onClose,onEdit}){
   const claimTotal=(a.claims||[]).reduce(
    (s,c)=>s+Number(c.amount||0),0
   );
-  return Number(a.salary||0)+commission+claimTotal;
+  return Number(a.salary||0)+commission+
+   Number(a.additionalPay||0)+claimTotal;
  }
 
  function assignmentTable(list){
@@ -2431,6 +2524,7 @@ function EventDetails({order:o,roles,onClose,onEdit}){
       <th>ROLE</th>
       <th>SALARY</th>
       {!separateCommissions&&<th>COMMISSION</th>}
+      <th>ADDITIONAL PAY</th>
       <th>CLAIMS</th>
       <th>TOTAL</th>
       <th>PAID DATE</th>
@@ -2450,6 +2544,14 @@ function EventDetails({order:o,roles,onClose,onEdit}){
          Number(o.price||0)*Number(a.commissionRate||0)/100
         ))}</td>
        }
+       <td>
+        <div>{money(a.additionalPay||0)}</div>
+        <small>
+         {a.additionalPayType==='Others'
+          ?(a.additionalPayOther||'Others')
+          :(a.additionalPayType||'-')}
+        </small>
+       </td>
        <td>{money(claimTotal)}</td>
        <td><b>{money(assignmentTotal(a))}</b></td>
        <td>{a.paidDate||'-'}</td>
@@ -2513,7 +2615,8 @@ function EventDetails({order:o,roles,onClose,onEdit}){
      <div><small>Total event income</small><b>{money(eventIncome)}</b></div>
      <div><small>Member salaries</small><b>{money(salary)}</b></div>
      <div><small>Member commissions</small><b>{money(commissionTotal)}</b></div>
-     <div><small>Additional member pay</small><b>{money(totalClaims)}</b></div>
+     <div><small>Member additional pay</small><b>{money(totalAdditionalPay)}</b></div>
+     <div><small>Member claims</small><b>{money(totalClaims)}</b></div>
      {legacyCommission>0&&
       <div><small>Previous event commission</small><b>{money(legacyCommission)}</b></div>
      }
@@ -2628,8 +2731,10 @@ function Performers({performers,orders,addPerson,update,notify,roles=[]}){
    const claimTotal=claims.reduce(
     (sum,c)=>sum+Number(c.amount||0),0
    );
+   const additionalPay=Number(assignment?.additionalPay||0);
 
-   const totalMemberPayment=salary+commission+claimTotal;
+   const totalMemberPayment=
+    salary+commission+additionalPay+claimTotal;
    const salaryAndClaimsPaid=!assignment||Boolean(assignment.paid);
    const commissionPaid=!commissionAssignment||Boolean(commissionAssignment.paid);
 
@@ -2642,6 +2747,7 @@ function Performers({performers,orders,addPerson,update,notify,roles=[]}){
     roleName:assignment?.roleName||(commissionAssignment?'Commission':'-'),
     salary,
     commission,
+    additionalPay,
     totalMemberPayment,
     paid:salaryAndClaimsPaid&&commissionPaid,
     paidDate:assignment?.paidDate||commissionAssignment?.paidDate||'',
@@ -2660,6 +2766,7 @@ function Performers({performers,orders,addPerson,update,notify,roles=[]}){
     .filter(a=>a.performerId===p.id&&!a.paid)
     .forEach(a=>{
      total+=Number(a.salary||0);
+     total+=Number(a.additionalPay||0);
      total+=(a.claims||[]).reduce(
       (s,c)=>s+Number(c.amount||0),0
      );
@@ -2959,6 +3066,7 @@ function Performers({performers,orders,addPerson,update,notify,roles=[]}){
          <th>ROLE</th>
          <th>SALARY</th>
          <th>COMMISSION</th>
+         <th>ADDITIONAL PAY</th>
          <th>CLAIMS</th>
          <th>TOTAL MEMBER PAYMENT</th>
          <th>PAYMENT STATUS</th>
@@ -2977,6 +3085,14 @@ function Performers({performers,orders,addPerson,update,notify,roles=[]}){
           <td>{a.roleName||'-'}</td>
           <td>{money(a.salary)}</td>
           <td>{money(a.commission)}</td>
+          <td>
+           <div>{money(a.additionalPay||0)}</div>
+           <small>
+            {a.additionalPayType==='Others'
+             ?(a.additionalPayOther||'Others')
+             :(a.additionalPayType||'-')}
+           </small>
+          </td>
           <td>{money(claimTotal)}</td>
           <td><strong>{money(a.totalMemberPayment)}</strong></td>
           <td>
@@ -3003,6 +3119,9 @@ function Salary({orders,data,update,notify}){
  const [expanded,setExpanded]=useState(null);
  const [form,setForm]=useState({
   salary:'',
+  additionalPay:'0',
+  additionalPayType:'',
+  additionalPayOther:'',
   claims:[]
  });
  const [claimDraft,setClaimDraft]=useState({
@@ -3037,7 +3156,8 @@ function Salary({orders,data,update,notify}){
   const claims=(a.claims||[]).reduce(
    (s,c)=>s+Number(c.amount||0),0
   );
-  return Number(a.salary||0)+commission+claims;
+  return Number(a.salary||0)+commission+
+   Number(a.additionalPay||0)+claims;
  }
 
  function commissionAmount(o,c){
@@ -3121,6 +3241,9 @@ function Salary({orders,data,update,notify}){
 
   setForm({
    salary:String(a.salary??0),
+   additionalPay:String(a.additionalPay??0),
+   additionalPayType:a.additionalPayType||'',
+   additionalPayOther:a.additionalPayOther||'',
    claims:(a.claims||[]).map(c=>({...c}))
   });
  }
@@ -3176,9 +3299,26 @@ function Salary({orders,data,update,notify}){
   if(!editing)return;
 
   const salary=Number(form.salary);
+  const additionalPay=Number(form.additionalPay||0);
 
   if(!Number.isFinite(salary)||salary<0){
    notify('Please enter a valid salary.');
+   return;
+  }
+
+  if(!Number.isFinite(additionalPay)||additionalPay<0){
+   notify('Please enter a valid additional pay amount.');
+   return;
+  }
+
+  if(additionalPay>0&&!form.additionalPayType){
+   notify('Please select what the additional pay is for.');
+   return;
+  }
+
+  if(additionalPay>0&&form.additionalPayType==='Others'&&
+   !form.additionalPayOther.trim()){
+   notify('Please enter the custom payment purpose.');
    return;
   }
 
@@ -3194,6 +3334,9 @@ function Salary({orders,data,update,notify}){
      ?{
        ...a,
        salary,
+       additionalPay,
+       additionalPayType:form.additionalPayType,
+       additionalPayOther:form.additionalPayOther,
        claims
       }
      :a
@@ -3425,7 +3568,6 @@ function Salary({orders,data,update,notify}){
       <option>Transportation</option>
       <option>Food</option>
       <option>Beverage</option>
-      <option>Laundry</option>
       <option>Toll</option>
       <option>Parking</option>
       <option>Equipment</option>
@@ -3527,6 +3669,43 @@ function Salary({orders,data,update,notify}){
      />
     </Field>
 
+    <div className="form-grid">
+     <Field label="Additional pay (RM)">
+      <input
+       type="number"
+       min="0"
+       step="0.01"
+       value={form.additionalPay}
+       onChange={e=>setForm(x=>({...x,additionalPay:e.target.value}))}
+       placeholder="0.00"
+      />
+     </Field>
+
+     <Field label="Pay for">
+      <select
+       value={form.additionalPayType}
+       onChange={e=>setForm(x=>({...x,additionalPayType:e.target.value}))}
+      >
+       <option value="">Select purpose</option>
+       <option value="Laundry">Laundry</option>
+       <option value="Food">Food</option>
+       <option value="Toll">Toll</option>
+       <option value="Parking">Parking</option>
+       <option value="Others">Others</option>
+      </select>
+     </Field>
+
+     {form.additionalPayType==='Others'&&
+      <Field label="Custom purpose">
+       <input
+        value={form.additionalPayOther}
+        onChange={e=>setForm(x=>({...x,additionalPayOther:e.target.value}))}
+        placeholder="Enter payment purpose"
+       />
+      </Field>
+     }
+    </div>
+
     <div className="subsection">
      <div className="subsection-head">
       <div>
@@ -3609,6 +3788,12 @@ function Salary({orders,data,update,notify}){
      <b>{money(form.salary)}</b>
     </div>
     <div className="sub-total">
+     <span>Additional pay — {form.additionalPayType==='Others'
+      ?(form.additionalPayOther||'Others')
+      :(form.additionalPayType||'Not selected')}</span>
+     <b>{money(form.additionalPay)}</b>
+    </div>
+    <div className="sub-total">
      <span>Additional claims</span>
      <b>{money(form.claims.reduce((s,c)=>s+Number(c.amount||0),0))}</b>
     </div>
@@ -3617,6 +3802,7 @@ function Salary({orders,data,update,notify}){
      <b>
       {money(
        Number(form.salary||0)+
+       Number(form.additionalPay||0)+
        form.claims.reduce((s,c)=>s+Number(c.amount||0),0)
       )}
      </b>
@@ -3694,6 +3880,10 @@ function Finance({orders,update,notify}){
   ),0
  );
 
+ const memberAdditionalPay=assignments.reduce(
+  (sum,a)=>sum+Number(a.additionalPay||0),0
+ );
+
  const legacyCommission=
   order?.commissionMode==='members'
    ?0
@@ -3705,7 +3895,8 @@ function Finance({orders,update,notify}){
   (sum,e)=>sum+Number(e.amount||0),0
  );
 
- const totalMemberPay=memberSalary+memberCommission+memberClaims;
+ const totalMemberPay=
+  memberSalary+memberCommission+memberAdditionalPay+memberClaims;
 
  const net=income-totalMemberPay-legacyCommission-expenses;
 
@@ -3748,6 +3939,11 @@ function Finance({orders,update,notify}){
     <div className="finance-card">
      <span>Member commissions</span>
      <b>{money(memberCommission)}</b>
+    </div>
+
+    <div className="finance-card">
+     <span>Member additional pay</span>
+     <b>{money(memberAdditionalPay)}</b>
     </div>
 
     <div className="finance-card">
@@ -3900,7 +4096,6 @@ function Finance({orders,update,notify}){
       <option>Transportation</option>
       <option>Food</option>
       <option>Beverage</option>
-      <option>Laundry</option>
       <option>Parking / toll</option>
       <option>Equipment</option>
       <option>Other</option>
