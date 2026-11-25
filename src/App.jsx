@@ -562,11 +562,20 @@ function App(){
   ),0
  );
 
- const memberCommission=orders.reduce(
-  (s,o)=>s+(o.assignments||[]).reduce(
-   (a,p)=>a+Number(p.commission||0),0
-  ),0
- );
+ const memberCommission=orders.reduce((sum,o)=>{
+  const commissionTotal=Array.isArray(o.commissionAssignments)
+   ?o.commissionAssignments.reduce((total,c)=>total+Number(
+     c.commission??(
+      Number(o.price||0)*Number(c.commissionRate||0)/100
+     )
+    ),0)
+   :(o.assignments||[]).reduce((total,p)=>total+Number(
+     p.commission??(
+      Number(o.price||0)*Number(p.commissionRate||0)/100
+     )
+    ),0);
+  return sum+commissionTotal;
+ },0);
 
  const memberClaims=orders.reduce(
   (s,o)=>s+(o.assignments||[]).reduce(
@@ -1359,7 +1368,7 @@ function Overview({data,orders,performers,income,net,setPage,newOrder,openOrder}
        <div className="list-main">
         <b>{o.event}</b>
         <small>
-         <MapPin size={12}/>{o.location}
+         <MapPin size={12}/>{o.location}{o.time?` · ${o.time}`:''}
         </small>
        </div>
 
@@ -1402,7 +1411,7 @@ function Overview({data,orders,performers,income,net,setPage,newOrder,openOrder}
   </div>
  </>;
 }
-function Orders({orders,query,setQuery,openOrder,editOrder,deleteOrder,newOrder,exportOrders}){const [tab,setTab]=useState('pending');const [month,setMonth]=useState('');const filtered=orders.filter(o=>(tab==='past'?o.status==='past':o.status!=='past')&&(`${o.orderNo} ${o.event} ${o.location}`.toLowerCase().includes(query.toLowerCase()))&&(!month||o.date?.startsWith(month))).sort((a,b)=>(b.date||'').localeCompare(a.date||''));return <><Heading eyebrow="BOOKING RECORDS" title="Events" desc="Track upcoming and completed lion dance performances." action={<button className="btn primary" onClick={newOrder}><Plus size={17}/> Add event</button>}/><div className="toolbar"><div className="tabs"><button className={tab==='pending'?'selected':''} onClick={()=>setTab('pending')}>Pending <span>{orders.filter(o=>o.status!=='past').length}</span></button><button className={tab==='past'?'selected':''} onClick={()=>setTab('past')}>Past <span>{orders.filter(o=>o.status==='past').length}</span></button></div><div className="searchbox"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search event…"/></div><input className="field month-field" type="month" value={month} onChange={e=>setMonth(e.target.value)}/><button className="btn outline" onClick={exportOrders}><Download size={16}/> Export</button></div><Panel title={`${tab==='pending'?'Pending':'Past'} events`} desc="Select an event name to view its full record."><div className="table-wrap"><table><thead><tr><th>EVENT NAME</th><th>DATE</th><th>LOCATION</th><th>TOTAL AMOUNT</th><th>MEMBERS</th><th>PAYMENT</th><th/></tr></thead><tbody>{filtered.map(o=><tr key={o.id}><td><button className="event-link" onClick={()=>openOrder(o)}>{o.event||'Untitled event'}</button><small>{o.orderNo}</small></td><td>{o.date}</td><td>{o.location}</td><td><div className="event-amount"><strong>{money(o.price)}</strong><small>Extra income: {money(o.extra)}</small></div></td><td>{o.assignments?.length||0}</td><td><span className={'status '+(o.paymentStatus==='Fully Received'?'payment-good':o.paymentStatus==='Partially received'?'payment-partial':'payment-pending')}>{o.paymentStatus||'Pending'}</span></td><td><div className="row-actions"><button className="icon-button" title="Edit" onClick={()=>editOrder(o)}><Pencil size={15}/></button><button className="icon-button danger" title="Delete" onClick={()=>deleteOrder(o.id)}><Trash2 size={15}/></button></div></td></tr>)}</tbody></table>{!filtered.length&&<Empty title={`No ${tab} events`} desc="Add an event or change your search filters."/>}</div></Panel></>}
+function Orders({orders,query,setQuery,openOrder,editOrder,deleteOrder,newOrder,exportOrders}){const [tab,setTab]=useState('pending');const [month,setMonth]=useState('');const filtered=orders.filter(o=>(tab==='past'?o.status==='past':o.status!=='past')&&(`${o.orderNo} ${o.event} ${o.location}`.toLowerCase().includes(query.toLowerCase()))&&(!month||o.date?.startsWith(month))).sort((a,b)=>(b.date||'').localeCompare(a.date||''));return <><Heading eyebrow="BOOKING RECORDS" title="Events" desc="Track upcoming and completed lion dance performances." action={<button className="btn primary" onClick={newOrder}><Plus size={17}/> Add event</button>}/><div className="toolbar"><div className="tabs"><button className={tab==='pending'?'selected':''} onClick={()=>setTab('pending')}>Pending <span>{orders.filter(o=>o.status!=='past').length}</span></button><button className={tab==='past'?'selected':''} onClick={()=>setTab('past')}>Past <span>{orders.filter(o=>o.status==='past').length}</span></button></div><div className="searchbox"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search event…"/></div><input className="field month-field" type="month" value={month} onChange={e=>setMonth(e.target.value)}/><button className="btn outline" onClick={exportOrders}><Download size={16}/> Export</button></div><Panel title={`${tab==='pending'?'Pending':'Past'} events`} desc="Select an event name to view its full record."><div className="table-wrap"><table><thead><tr><th>EVENT NAME</th><th>DATE</th><th>LOCATION</th><th>TOTAL AMOUNT</th><th>MEMBERS</th><th>PAYMENT</th><th/></tr></thead><tbody>{filtered.map(o=><tr key={o.id}><td><button className="event-link" onClick={()=>openOrder(o)}>{o.event||'Untitled event'}</button><small>{o.orderNo}</small></td><td>{o.date}{o.time&&<small>{o.time}</small>}</td><td>{o.location}</td><td><div className="event-amount"><strong>{money(o.price)}</strong><small>Extra income: {money(o.extra)}</small></div></td><td>{o.assignments?.length||0}</td><td><span className={'status '+(o.paymentStatus==='Fully Received'?'payment-good':o.paymentStatus==='Partially received'?'payment-partial':'payment-pending')}>{o.paymentStatus||'Pending'}</span></td><td><div className="row-actions"><button className="icon-button" title="Edit" onClick={()=>editOrder(o)}><Pencil size={15}/></button><button className="icon-button danger" title="Delete" onClick={()=>deleteOrder(o.id)}><Trash2 size={15}/></button></div></td></tr>)}</tbody></table>{!filtered.length&&<Empty title={`No ${tab} events`} desc="Add an event or change your search filters."/>}</div></Panel></>}
 function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
  const [f,setF]=useState(()=>{
   const price=Number(order?.price||0);
@@ -1435,6 +1444,7 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
    orderNo:order?.orderNo||'LD-'+Date.now().toString().slice(-6),
    event:order?.event||'',
    date:order?.date||today(),
+   time:order?.time||'',
    location:order?.location||'',
    customer:order?.customer||'',
    price:order?.price??'',
@@ -1816,6 +1826,14 @@ function OrderEditor({order,performers,roles,onClose,onAddPerson,onSave}){
       type="date"
       value={f.date}
       onChange={e=>set('date',e.target.value)}
+     />
+    </Field>
+
+    <Field label="Event time">
+     <input
+      type="time"
+      value={f.time||''}
+      onChange={e=>set('time',e.target.value)}
      />
     </Field>
 
@@ -2410,6 +2428,7 @@ function EventDetails({order:o,roles,onClose,onEdit}){
     <div><small>Event</small><b>{o.event||'Untitled event'}</b></div>
     <div><small>Event ID</small><b>{o.orderNo||'-'}</b></div>
     <div><small>Date</small><b>{o.date||'-'}</b></div>
+    <div><small>Time</small><b>{o.time||'-'}</b></div>
     <div><small>Location</small><b>{o.location||'-'}</b></div>
     <div><small>Customer / organizer</small><b>{o.customer||'-'}</b></div>
     <div><small>Payment status</small><b>{o.paymentStatus||'Pending'}</b></div>
@@ -3222,7 +3241,7 @@ function Salary({orders,data,update,notify}){
         <div>
          <h3>{o.event||'Untitled event'}</h3>
          <small>
-          {o.orderNo||'No event number'} · {o.date||'No date'}
+          {o.orderNo||'No event number'} · {o.date||'No date'}{o.time?` · ${o.time}`:''}
          </small>
         </div>
         <div style={{
@@ -3336,6 +3355,8 @@ function Salary({orders,data,update,notify}){
       <option>Medical</option>
       <option>Transportation</option>
       <option>Food</option>
+      <option>Beverage</option>
+      <option>Laundry</option>
       <option>Toll</option>
       <option>Parking</option>
       <option>Equipment</option>
@@ -3586,13 +3607,17 @@ function Finance({orders,update,notify}){
   (sum,a)=>sum+Number(a.salary||0),0
  );
 
- const memberCommission=assignments.reduce(
-  (sum,a)=>sum+Number(
-   a.commission??(
-    Number(order?.price||0)*Number(a.commissionRate||0)/100
-   )
-  ),0
- );
+ const memberCommission=Array.isArray(order?.commissionAssignments)
+  ?order.commissionAssignments.reduce((sum,a)=>sum+Number(
+    a.commission??(
+     Number(order?.price||0)*Number(a.commissionRate||0)/100
+    )
+   ),0)
+  :assignments.reduce((sum,a)=>sum+Number(
+    a.commission??(
+     Number(order?.price||0)*Number(a.commissionRate||0)/100
+    )
+   ),0);
 
  const memberClaims=assignments.reduce(
   (sum,a)=>sum+(a.claims||[]).reduce(
@@ -3805,6 +3830,8 @@ function Finance({orders,update,notify}){
      <select value={type} onChange={e=>setType(e.target.value)}>
       <option>Transportation</option>
       <option>Food</option>
+      <option>Beverage</option>
+      <option>Laundry</option>
       <option>Parking / toll</option>
       <option>Equipment</option>
       <option>Other</option>
